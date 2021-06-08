@@ -2,10 +2,10 @@
  Small and simple: Thread Pools with Tasks
 
 I needed some better constructs than what was available in Delphi 2009, to be more productive with one of my major programs (this runs as a critical service 7x24, with hundreds of threads, but also short-living parallel activities to manage timeouts and some monitoring).
-I felt that I needed some better program constructs than Delphi's TThread class, a better way of handling threads as also a built-in and safe way to wait for completion of started tasks.
+I felt that I needed better program constructs than Delphi's TThread class, a better way of handling threads, by a built-in and safe way to start tasks, wait for completion of tasks, as also to cancel a task.
 As for keeping the implementation as small and fast as possible, this is relying on pre-existing Windows constructs all the way (Slim RW Locks, Condition Variables, Events).
 
-### Kind of objects:
+## Available objects:
 
 * ITask: Reference to an action passed to a thread pool for asynchronous execution.
 
@@ -16,9 +16,9 @@ As for keeping the implementation as small and fast as possible, this is relying
 * TGuiThread: Allows any thread to inject calls into the GUI thread.
 
 
-### Implemention concept:
+## Implemention concept:
 
-The heart of each thread pool is a thread-safe queue for task objects. The application adds tasks to the queue. Threads are created automatically to drain the queue. Idle threads terminate after a configurable timeout. There are parameters to control the three main aspects of the model: Maximum number of threads, Maximum idle time per thread, Maximum queue length.
+The heart of each thread pool is a thread-safe queue for task objects. The application adds tasks to the queue. Threads are created automatically to drain the queue. Idle threads terminate after a configurable timeout. There are parameters to control the three main aspects of this model: Maximum number of threads, Maximum idle time per thread, Maximum number of tasks waiting to be served.
 
 To enable non-GUI threads to delegate calls to the GUI thread, a Windows messaage hook is used. This has the advantage that the processing is not blocked by non-Delphi modal message loops, neither by the standard Windows message box nor by moving or resizing a window.
 
