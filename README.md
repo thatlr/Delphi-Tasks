@@ -5,7 +5,7 @@ I needed some better constructs than what was available in Delphi 2009, to be mo
 I felt that I needed better program constructs than Delphi's TThread class, a better way of handling threads, by a built-in and safe way to start tasks, wait for completion of tasks, as also to cancel a task.
 As for keeping the implementation as small and fast as possible, this is relying on pre-existing Windows constructs all the way (Slim RW Locks, Condition Variables, Events).
 
-## Available objects:
+## Available objects (see Tasks.pas):
 
 * ITask: Reference to an action passed to a thread pool for asynchronous execution.
 
@@ -30,3 +30,7 @@ Also note that Windows only schedules threads within a single, static group of C
 Tested with:
 - Delphi 2009
 - Delphi 10.1.2 Berlin: 32bit and 64bit
+
+## Open issues:
+
+Some sensible demo code.
