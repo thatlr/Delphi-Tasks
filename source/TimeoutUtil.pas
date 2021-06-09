@@ -41,7 +41,12 @@ type
 implementation
 {############################################################################}
 
-uses WindowsDefs;
+uses Windows;
+
+{$if not declared(GetTickCount64)}
+// since Vista:
+function GetTickCount64: uint64; stdcall; external Windows.kernel32 name 'GetTickCount64';
+{$ifend}
 
 
 { TTimeoutTime }
@@ -53,7 +58,7 @@ uses WindowsDefs;
  //===================================================================================================================
 constructor TTimeoutTime.FromMilliSecs(Value: uint32);
 begin
-  FTimeoutTime :=  WindowsDefs.GetTickCount64 + Value;
+  FTimeoutTime :=  GetTickCount64 + Value;
 end;
 
 
@@ -63,7 +68,7 @@ end;
  //===================================================================================================================
 constructor TTimeoutTime.FromSecs(Value: uint32);
 begin
-  FTimeoutTime := WindowsDefs.GetTickCount64 + Value * uint64(1000);
+  FTimeoutTime := GetTickCount64 + Value * uint64(1000);
 end;
 
 
@@ -74,7 +79,7 @@ function TTimeoutTime.RemainingMilliSecs: uint64;
 var
   res: int64 absolute Result;
 begin
-  res := int64(FTimeoutTime) - int64(WindowsDefs.GetTickCount64);
+  res := int64(FTimeoutTime) - int64(GetTickCount64);
   if res < 0 then res := 0;
 end;
 
@@ -106,7 +111,7 @@ end;
  //===================================================================================================================
 function TTimeoutTime.IsElapsed: boolean;
 begin
-  Result := WindowsDefs.GetTickCount64 >= FTimeoutTime;
+  Result := GetTickCount64 >= FTimeoutTime;
 end;
 
 end.
