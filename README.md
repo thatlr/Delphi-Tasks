@@ -2,7 +2,7 @@
  Small and simple: Thread Pools with Tasks
 
 I needed some better constructs than what was available in Delphi 2009, to be more productive with one of my major programs (this runs as a critical service 7x24, with hundreds of threads, but also short-living parallel activities to manage timeouts and some monitoring).
-I felt that I needed better program constructs than Delphi's TThread class, a better way of handling threads, by a built-in and safe way to start tasks, wait for completion of tasks, as also to cancel a task.
+I felt that I needed somthing better than Delphi's TThread class, that is, a better way of handling threads by a built-in and safe way to start tasks, wait for completion of tasks, as also to cancel a task.
 As for keeping the implementation as small and fast as possible, this is relying on pre-existing Windows constructs all the way (Slim RW Locks, Condition Variables, Events).
 
 ## Available objects (see Tasks.pas):
@@ -34,3 +34,4 @@ Tested with:
 ## Open issues:
 
 Some sensible demo code.
+Some some grammatical mistakes in the comments.
