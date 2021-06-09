@@ -54,8 +54,8 @@ type
 	class function WaitAll(const Handles: array of THandle; MilliSecondsTimeout: uint32): boolean; overload;
 	class function WaitAll(const Handles: array of THandle; const Timeout: TTimeoutTime): boolean; overload;
 
-	// Returns true if the handle is currently 'signaled'. Equivalent to Wait (0), in particular it also resets
-	// auto-reset objects.
+	// Returns true if the handle is currently 'signaled'. Equivalent to Wait(0), in particular it also resets
+	// auto-reset objects and requests ownership of a mutex.
 	function IsSignaled: boolean;
 
 	// Makes the Windows handle available for use in Windows functions. The handle must not be released.
@@ -80,7 +80,7 @@ type
 
   //===================================================================================================================
   // Encapsulates Windows kernel objects that have a 'signaled' state and whose handle invalid value is INVALID_HANDLE_VALUE,
-  // which applies to file handle, directory handles and directoryy-change-notification handles.
+  // which applies to file handle, directory handles and directory-change-notification handles.
   //===================================================================================================================
   TFileHandle = class(TWaitHandle)
   public
@@ -95,8 +95,8 @@ type
 
   // How Create/Open functions work regarding named synchronization objects:
   THandleOpenMode = (
-	homOpen,			// the Windows object must already exist, otherwise an exceptionis thrown
-	homCreateNew,		// the Windows object must not yet exist , otherwise an exceptionis thrown
+	homOpen,			// the Windows object must already exist, otherwise an exception is thrown
+	homCreateNew,		// the Windows object must not yet exist, otherwise an exception is thrown
 	homCreateOrOpen		// if the Windows object exists it will be opened, otherwise it will be created
   );
 
@@ -136,17 +136,16 @@ type
   //===================================================================================================================
   TMutex = class(TNonFileHandle)
   public
-	// Creates an anonymous Windows Mutex object.
+	// Creates an anonymous unowned Windows Mutex object.
 	// If {InitialOwner} is false, the object is signaled and not owned by any thread.
 	// If {InitialOwner} is true, the calling thread owns the newly created mutex and must later release it to allow
 	// other threads go grab it.
-	constructor Create(InitialOwner: boolean);
+	constructor Create;
 
-	// Createas a named Windows Mutex object.
-	// If an existing event is openend, {ManualReset} is ignored.
-	constructor CreateNamed(OpenMode: THandleOpenMode; const Name: string; InitialOwner: boolean);
+	// Createas a named unowned Windows Mutex object.
+	constructor CreateNamed(OpenMode: THandleOpenMode; const Name: string);
 
-	// Releases the mutext and closes the handle.
+	// Releases the mutex and closes the handle.
 	destructor Destroy; override;
 
 	// Releases ownership, which sets the object to 'signaled'.
@@ -162,7 +161,7 @@ type
   //===================================================================================================================
   TWaitableTimer = class(TNonFileHandle)
   public
-	// Generates a Windows Waitable Timer object that is not initially signaled.
+	// Creates a Windows Waitable Timer object that is not initially signaled.
 	// If {ManualReset} is false, the signaled state is automatically reset by the operating system when a wait call
 	// has reacted to the signaled state of the timer object.
 	// If {ManualReset} is true, the signaled state is retained until it is explicitly reset by the application.
@@ -170,16 +169,17 @@ type
 
 	// Starts or restarts the timer with the given parameters.
 	// FirstTimeMilliSeconds: If non-zero, the timer is set to 'not signaled'. It will become 'signaled' after this
-	// time has elapsed. If zero, the timer is immediately set to 'signaled'.
-	// RepeatTimeMilliSeconds: If not zero, the timer is always restarted with this time after <FirstTime> has elapsed
+	// time has elapsed; if zero, the timer is immediately set to 'signaled'.
+	// RepeatTimeMilliSeconds: If not zero, the timer is restarted automatically after each expiration.
 	// (without changing the signaled state).
 	procedure Start(FirstTimeMilliSeconds: uint32; RepeatTimeMilliSeconds: uint32 = 0);
 
-	// Stop the timer. The signaled state of the timer object is *not* changed.
-	// If the timer is not active, nothing happens.
+	// Stops the timer. The signaled state of the timer object is *not* changed.
+	// If the timer is not started, nothing happens.
 	procedure Stop;
 
 	// Stops the timer and resets the signaled state of the timer object.
+	// If the timer is not started, nothing happens.
 	procedure Reset;
   end;
 
@@ -419,14 +419,14 @@ begin
 	Handle := Windows.OpenEvent(SYNCHRONIZE or EVENT_MODIFY_STATE, false, PChar(Name));
   end
   else begin
-	// create an new Windows event (but it will be opened, if already existing and the permissions are right):
+	// create an new Windows event (but it will be opened, if it already exists and the permissions are right):
 	Flags := 0;
 	if ManualReset then Flags := Flags or CREATE_EVENT_MANUAL_RESET;
 
 	Handle := CreateEventEx(nil, PChar(Name), Flags, SYNCHRONIZE or EVENT_MODIFY_STATE);
 
 	if (Handle <> 0) and (OpenMode = homCreateNew) and (Windows.GetLastError = ERROR_ALREADY_EXISTS) then begin
-	  // already exists, but not expected:
+	  // already exists, but a new one is demanded:
 	  Windows.CloseHandle(Handle);
 	  raise EOSSysError.Create(ERROR_ALREADY_EXISTS);
 	end;
@@ -463,29 +463,22 @@ function CreateMutexEx(
   ): THandle; stdcall; external Windows.kernel32 name {$ifdef UNICODE}'CreateMutexExW'{$else}'CreateMutexExA'{$endif};
 {$ifend}
 
-const
-  CREATE_MUTEX_INITIAL_OWNER = $00000001;
-
 
  //===================================================================================================================
  //===================================================================================================================
-constructor TMutex.Create(InitialOwner: boolean);
+constructor TMutex.Create;
 var
-  Flags: DWORD;
   Handle: THandle;
 begin
-  Flags := 0;
-  if InitialOwner then Flags := Flags or CREATE_MUTEX_INITIAL_OWNER;
-  Handle := CreateMutexEx(nil, nil, Flags, SYNCHRONIZE or MUTEX_MODIFY_STATE);
+  Handle := CreateMutexEx(nil, nil, 0, SYNCHRONIZE or MUTEX_MODIFY_STATE);
   inherited Create(Handle, Windows.GetLastError);
 end;
 
 
  //===================================================================================================================
  //===================================================================================================================
-constructor TMutex.CreateNamed(OpenMode: THandleOpenMode; const Name: string; InitialOwner: boolean);
+constructor TMutex.CreateNamed(OpenMode: THandleOpenMode; const Name: string);
 var
-  Flags: DWORD;
   Handle: THandle;
 begin
   if OpenMode = homOpen then begin
@@ -493,14 +486,11 @@ begin
 	Handle := Windows.OpenMutex(SYNCHRONIZE or MUTEX_MODIFY_STATE, false, PChar(Name));
   end
   else begin
-	// create an new Windows mutex (but it will be opened, if already existing and the permissions are right):
-	Flags := 0;
-	if InitialOwner then Flags := Flags or CREATE_MUTEX_INITIAL_OWNER;
-
-	Handle := CreateMutexEx(nil, PChar(Name), Flags, SYNCHRONIZE or MUTEX_MODIFY_STATE);
+	// create an new Windows mutex (but it will be opened, if it already exists and the permissions are right):
+	Handle := CreateMutexEx(nil, PChar(Name), 0, SYNCHRONIZE or MUTEX_MODIFY_STATE);
 
 	if (Handle <> 0) and (OpenMode = homCreateNew) and (Windows.GetLastError = ERROR_ALREADY_EXISTS) then begin
-	  // already exists, but should not:
+	  // already exists, but a new one is demanded:
 	  Windows.CloseHandle(Handle);
 	  raise EOSSysError.Create(ERROR_ALREADY_EXISTS);
 	end;

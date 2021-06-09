@@ -4,7 +4,7 @@ unit StdLib;
   Collection of various utility types and helper functions, for any type of application (GUI, command-line, service),
   therefore without any VCL dependency.
 
-  This is a very small subset of content of the original unit.
+  It is a very small subset of content of the original unit.
 }
 
 {$include LibOptions.inc}
@@ -66,7 +66,7 @@ procedure Win32Check(RetVal: BOOL; const Ctx: string); overload;
 
 
 //
-// Replacements for SysUtils FreeAndNil ("inline" gives too much code, can be miscompiled bei D2009 due to improper
+// Replacements for SysUtils FreeAndNil ("inline" gives too much code, can be miscompiled by D2009 due to improper
 // usage of the "var" argument):
 //
 
