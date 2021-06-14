@@ -1084,12 +1084,9 @@ end;
  //===================================================================================================================
 function TGuiThread.TQueue.Extract: PActionCtx;
 begin
-  Assert((FFirst = nil) and (FLast = nil) or (FFirst <> nil) and (FLast <> nil));
-
   Result := FFirst;
   if Result <> nil then begin
 	FFirst := Result.FNext;
-	if FFirst = nil then FLast := nil;
   end;
 end;
 
@@ -1101,14 +1098,11 @@ function TGuiThread.TQueue.Dequeue(Item: PActionCtx): boolean;
 var
   tmp: ^PActionCtx;
 begin
-  Assert((FFirst = nil) and (FLast = nil) or (FFirst <> nil) and (FLast <> nil));
-
   tmp := @FFirst;
   while tmp^ <> nil do begin
 	if tmp^ = Item then begin
-	  // gefunden => ausketten:
+	  // found => dequeue:
 	  tmp^ := tmp^^.FNext;
-	  if FFirst = nil then FLast := nil;
 	  exit(true);
 	end;
 	tmp := @tmp^^.FNext;
