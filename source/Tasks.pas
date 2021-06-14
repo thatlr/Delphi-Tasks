@@ -348,8 +348,8 @@ type
 		FFirst: PActionCtx;
 		FLast: PActionCtx;
 	  public
-		procedure Append(Item: PActionCtx);
-		function Extract: PActionCtx;
+		procedure Append(Item: PActionCtx); inline;
+		function Extract: PActionCtx; inline;
 		function Dequeue(Item: PActionCtx): boolean;
 	  end;
 
@@ -620,15 +620,19 @@ end;
  //===================================================================================================================
 procedure TTaskWrapper.Execute;
 const
-  DefaultFpuCfg = $1332;	// Start value of System.Default8087CW, is set in the initialization section by the main thread via _FpuInit
+  DefaultFpuCfg = $1332;	// Start value of System.Default8087CW
+  DefaultSseCfg = $1900;	// Start value of System.DefaultMXCSR
 begin
   Assert(FState = TTaskState.Pending);
   Assert(not Assigned(FUnhandledException));
   Assert(not Assigned(FCompleteHandle) or not FCompleteHandle.IsSignaled);
 
   try
-	// always start with the default FPU configuration (idiotically there is also a global, non-thread-specific variable Default8087CW):
-	System.Set8087CW(DefaultFpuCfg);
+	// only 32bit: always start with the default FPU configuration (idiotically there is also a global, non-thread-specific
+	// variable Default8087CW):
+	{$ifdef Win32} System.Set8087CW(DefaultFpuCfg);	{$endif}
+	// always start with the default SSE configuration (same nonsense with the global, non-thread-specific variable DefaultMXCSR):
+	{$if declared(SetMXCSR)} System.SetMXCSR(DefaultSseCfg); {$ifend}
 	try
 	  FAction(self.CancelObj);
 	finally
@@ -1071,8 +1075,6 @@ end;
  //===================================================================================================================
 procedure TGuiThread.TQueue.Append(Item: PActionCtx);
 begin
-  Assert((FFirst = nil) and (FLast = nil) or (FFirst <> nil) and (FLast <> nil));
-
   if FFirst = nil then FFirst := Item
   else FLast.FNext := Item;
   FLast := Item;
