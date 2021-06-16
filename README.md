@@ -34,4 +34,4 @@ Tested with:
 ## Open issues:
 
 Some sensible demo code.
-Some some grammatical mistakes in the comments.
+Some grammatical mistakes in the comments.
