@@ -731,10 +731,10 @@ end;
 function TTaskWrapper.Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean;
 begin
   if FState = TTaskState.Pending then begin
-	if Windows.GetCurrentThreadId = System.MainThreadID then
-	  self.GuiWait(self.CancelWH.Handle, TimeoutMillisecs)
+	if System.IsConsole or (Windows.GetCurrentThreadId <> System.MainThreadID) then
+	  self.CompleteWH.Wait(TimeoutMillisecs)
 	else
-	  self.CompleteWH.Wait(TimeoutMillisecs);
+	  self.GuiWait(self.CancelWH.Handle, TimeoutMillisecs);
   end;
 
   if ThrowOnError and Assigned(FUnhandledException) then
