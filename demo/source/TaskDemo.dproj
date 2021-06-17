@@ -56,6 +56,10 @@
 			<DelphiCompile Include="TaskDemo.dpr">
 				<MainSource>MainSource</MainSource>
 			</DelphiCompile>
+			<DCCReference Include="MainForm.pas">
+				<Form>fMainForm</Form>
+			</DCCReference>
+			<DCCReference Include="TaskUtils.pas"/>
 			<BuildConfiguration Include="Basis">
 				<Key>Base</Key>
 			</BuildConfiguration>

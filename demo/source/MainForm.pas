@@ -70,8 +70,6 @@ var
   Task: ITask;
 }
 begin
-  TApplicationEvents.Create(Application).OnSettingChange := StdLib.TDummy.OnSettingChange;
-
   self.Constraints.MinWidth := self.Width;
   self.Constraints.MinHeight := self.Height;
 
