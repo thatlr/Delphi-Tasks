@@ -1,10 +1,8 @@
 unit StopWatch;
 
 {
-  - TStopWatch: Stoppuhr für genaue Zeitmessungen.
+  - TStopWatch: Supports accurate time measurements
 
-
-  Änderungen:
 }
 
 {$include LibOptions.inc}
@@ -13,11 +11,9 @@ interface
 
 type
   //=============================================================================
-  // Stoppuhr mit hoher Auflösung (ungefähr 1 Mikrosekunde).
+  // High resolution stopwatch (approximately 1 microsecond).
   //=============================================================================
   TStopWatch = record
-  strict private
-	class var FCountsPerSecond: int64;
   strict private
 	FCounts: int64;
 	function GetElapsed: double;
@@ -60,13 +56,15 @@ end;
 
 
  //=============================================================================
- // Liefert die aufgelaufende Dauer als TTimeSpan.
+ // Returns the duration from Start() to Stop().
  //=============================================================================
 function TStopWatch.GetElapsed: double;
+var
+  CountsPerSecond: int64;
 begin
   // On systems that run Windows XP or later, the function will always succeed:
-  if FCountsPerSecond = 0 then Windows.QueryPerformanceFrequency(FCountsPerSecond);;
-  Result := FCounts / FCountsPerSecond;
+  Windows.QueryPerformanceFrequency(CountsPerSecond);
+  Result := FCounts / CountsPerSecond;
 end;
 
 end.
