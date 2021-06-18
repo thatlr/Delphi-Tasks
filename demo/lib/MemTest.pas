@@ -110,6 +110,7 @@ implementation
 
 uses Windows, WinSlimLock;
 
+{$ifdef MEMTEST_ACTIVE}
 
 //==================================================================================================================================
 //== Functions for outputting trace information
@@ -286,8 +287,6 @@ begin
 end;
 
 
-{$ifdef MEMTEST_ACTIVE}
-
  //===================================================================================================================
  //== Replacement functions for GetMem/FreeMem with added consistency checks and book-keeping
  //===================================================================================================================
@@ -356,6 +355,18 @@ var
 	FStats: @ComMemStats;
   );
 
+  function IsDebuggerPresent: BOOL; stdcall; external Windows.kernel32 name 'IsDebuggerPresent';
+
+
+ //===================================================================================================================
+ // Cause a break into the debugger. Does nothing when not debugged.
+ //===================================================================================================================
+procedure MyDebugBreak;
+begin
+  // In the past, DebugBreak got ignored when not being debugged. Now it terminates the process.
+  if IsDebuggerPresent then Windows.DebugBreak;
+end;
+
 
  //===================================================================================================================
  // Outputs the texts in <Strs> on stderr and in the Windows debug output, and triggers a debugger break.
@@ -373,9 +384,9 @@ begin
 	WriteStrToFile(h, [Buf, CrLf]);
   end;
 
-  // Output in the EventLog window of the Delphi IDE (or any other debugger):
+  // posts the message to the EventLog window of the Delphi IDE (or any other debugger):
   Windows.OutputDebugStringA(@Buf[1]);
-  Windows.DebugBreak;
+  MyDebugBreak;
 end;
 
 
@@ -390,7 +401,7 @@ begin
 
   if PP = nil then begin
 	if MyBreakOnAllocationError then
-	  Windows.DebugBreak;
+	  MyDebugBreak;
 	exit(nil);
   end;
 
@@ -474,7 +485,7 @@ begin
 
   if PP = nil then begin
 	if MyBreakOnAllocationError then
-	  Windows.DebugBreak;
+	  MyDebugBreak;
 	exit(nil);
   end;
 
@@ -549,7 +560,7 @@ begin
   Result := PByte(Block) + sizeof(TPreRec);
 
   if (Result = FStats.AllocBreakAddr) or (Size = FStats.AllocBreakSize) then
-	Windows.DebugBreak;
+	MyDebugBreak;
 end;
 
 
@@ -562,7 +573,7 @@ begin
   Result := PPreRec(PByte(Payload) - sizeof(TPreRec));
 
   if (Payload = FStats.FreeBreakAddr) or (Result^.Size = FStats.FreeBreakSize) then
-	Windows.DebugBreak;
+	MyDebugBreak;
 
   FLock.AcquireExclusive;
 
@@ -767,7 +778,7 @@ var
   q: PPostRec;
 begin
   SignalError([FStats.Title, ' Memory corruption detected: p=$', PtrToHex(p)]);
-  Windows.DebugBreak;
+  MyDebugBreak;
 
   hFile := Windows.CreateFile('memdump_corrupt_block.txt', FILE_APPEND_DATA, FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil, OPEN_ALWAYS, 0, 0);
   if hFile <> INVALID_HANDLE_VALUE then begin
@@ -931,7 +942,7 @@ begin
 	FillChar(Result^, gRequestedSize, MyAllocFillByte);
   end
   else if MyBreakOnAllocationError then begin
-	Windows.DebugBreak;
+	MyDebugBreak;
   end;
 end;
 
@@ -1001,7 +1012,7 @@ begin
 	end;
   end
   else if MyBreakOnAllocationError then begin
-	Windows.DebugBreak;
+	MyDebugBreak;
   end;
 end;
 
