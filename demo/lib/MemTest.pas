@@ -96,6 +96,8 @@ var
 	FreeBreakSize: High(_NativeUInt);
   );
 
+  ComInitCount: integer;					// number of "open" CoInitialize calls, over all threads
+
   // as to whether a debug-break should be triggered in the event of alloc errors (e.g. out of memory):
   MyBreakOnAllocationError: boolean;
 
@@ -108,9 +110,9 @@ function IsMemoryValid: boolean;
 implementation
 {############################################################################}
 
-uses Windows, WinSlimLock;
-
 {$ifdef MEMTEST_ACTIVE}
+
+uses Windows, WinSlimLock;
 
 //==================================================================================================================================
 //== Functions for outputting trace information
@@ -862,16 +864,56 @@ type
 	procedure PostHeapMinimize; stdcall;
   end;
 
+  IInitializeSpy = interface(IUnknown)
+	['{00000034-0000-0000-C000-000000000046}']
+	function PreInitialize(dwCoInit: DWORD; dwCurThreadAptRefs: DWORD): HRESULT; stdcall;
+	function PostInitialize(hrCoInit: HRESULT; dwCoInit: DWORD; dwNewThreadAptRefs: DWORD): HRESULT; stdcall;
+	function PreUninitialize(dwCurThreadAptRefs: DWORD): HRESULT; stdcall;
+	function PostUninitialize(dwNewThreadAptRefs: DWORD): HRESULT; stdcall;
+  end;
+
 const
   ole32 = 'ole32.dll';
+  oleaut32 = 'oleaut32.dll';
 
 function IsEqualGUID(const guid1, guid2: TGUID): Boolean; stdcall; external ole32 name 'IsEqualGUID';
 function CoRegisterMallocSpy(mallocSpy: IMallocSpy): HResult; stdcall; external ole32 name 'CoRegisterMallocSpy';
 function CoRevokeMallocSpy: HResult stdcall; external ole32 name 'CoRevokeMallocSpy';
-procedure SetOaNoCache; cdecl; external 'oleaut32.dll' name 'SetOaNoCache';
+procedure SetOaNoCache; cdecl; external oleaut32 name 'SetOaNoCache';
+function CoRegisterInitializeSpy(pSpy: IInitializeSpy; out puliCookie: ULARGE_INTEGER): HRESULT; stdcall; external ole32 name 'CoRegisterInitializeSpy';
+function CoRevokeInitializeSpy(uliCookie: ULARGE_INTEGER): HRESULT; stdcall; external ole32 name 'CoRevokeInitializeSpy';
+
+type
+  // structure to implement IMallocSpy as a singleton object:
+  TComAllocSpy = record
+  strict private
+	var
+	  FVMT: pointer;
+
+	function QueryInterface(const IID: TGUID; out Obj: pointer): HResult; stdcall;
+	function AddRef: Integer; stdcall;
+	function Release: Integer; stdcall;
+	function PreAlloc(cbRequest: SIZE_T): SIZE_T; stdcall;
+	function PostAlloc(pActual: Pointer): Pointer; stdcall;
+	function PreFree(pRequest: Pointer; fSpyed: BOOL): Pointer; stdcall;
+	procedure PostFree(fSpyed: BOOL); stdcall;
+	function PreRealloc(pRequest: Pointer; NewSize: SIZE_T; out ppNewRequest: Pointer; fSpyed: BOOL): SIZE_T; stdcall;
+	function PostRealloc(pActual: Pointer; fSpyed: BOOL): Pointer; stdcall;
+	function PreGetSize(pRequest: Pointer; fSpyed: BOOL): Pointer; stdcall;
+	function PostGetSize(cbActual: SIZE_T; fSpyed: BOOL): SIZE_T; stdcall;
+	function PreDidAlloc(pRequest: Pointer; fSpyed: BOOL): Pointer; stdcall;
+	function PostDidAlloc(pRequest: Pointer; fSpyed: BOOL; fActual: Integer): Integer; stdcall;
+	procedure NoopHeapMinimize; stdcall;
+  public
+	class procedure Init; static; inline;
+	class procedure Fini; static; inline;
+  end;
+
+threadvar
+  gRequestedSize: _NativeUInt;
 
 
-{ TMallocSpy }
+{ TComAllocSpy }
 
 // All allocations and releases are still performed by the original COM allocator.
 //
@@ -881,10 +923,10 @@ procedure SetOaNoCache; cdecl; external 'oleaut32.dll' name 'SetOaNoCache';
 
  //===================================================================================================================
  //===================================================================================================================
-function Spy_QueryInterface(self: Pointer; const IID: TGUID; out Obj: pointer): HResult; stdcall;
+function TComAllocSpy.QueryInterface(const IID: TGUID; out Obj: pointer): HResult;
 begin
   if IsEqualGUID(IID, IMallocSpy) then begin
-	Obj := self;
+	Obj := @self;
 	Result := S_OK;
   end
   else begin
@@ -897,7 +939,7 @@ end;
  //===================================================================================================================
  // Not called because we don't use it in QueryInterface.
  //===================================================================================================================
-function Spy_AddRef(self: Pointer): Integer; stdcall;
+function TComAllocSpy.AddRef: Integer;
 begin
   Result := 1;
 end;
@@ -907,15 +949,11 @@ end;
  // This is called during CoRevokeMallocSpy or (when there are outstanding "spyed" allocations) after the last
  // allocation is released. Maybe called *during* ExitProcess.
  //===================================================================================================================
-function Spy_Release(self: Pointer): Integer; stdcall;
+function TComAllocSpy.Release: Integer;
 begin
   Assert(ComMem.FStats.AllocMemBlocks = 0);
   Result := 0;
 end;
-
-
-threadvar
-  gRequestedSize: _NativeUInt;
 
 
  //===================================================================================================================
@@ -923,7 +961,7 @@ threadvar
  // However, when the actual allocation encounters a real memory failure and returns NULL, PostAlloc is called.
  // Result = byte count to be passed to underlying allocator
  //===================================================================================================================
-function Spy_PreAlloc(self: Pointer; cbRequest: SIZE_T): SIZE_T; stdcall;
+function TComAllocSpy.PreAlloc(cbRequest: SIZE_T): SIZE_T;
 begin
   gRequestedSize := cbRequest;
 
@@ -931,7 +969,7 @@ begin
 end;
 
  // Result = pointer to be returned by IMalloc::Alloc
-function Spy_PostAlloc(self: Pointer; pActual: Pointer): Pointer; stdcall;
+function TComAllocSpy.PostAlloc(pActual: Pointer): Pointer;
 begin
   Result := pActual;
 
@@ -950,7 +988,7 @@ end;
  //===================================================================================================================
  // Result = pointer to be passed to underlying allocator
  //===================================================================================================================
-function Spy_PreFree(self: Pointer; pRequest: Pointer; fSpyed: BOOL): Pointer; stdcall;
+function TComAllocSpy.PreFree(pRequest: Pointer; fSpyed: BOOL): Pointer;
 begin
   Result := pRequest;
   if fSpyed and (Result <> nil) then begin
@@ -961,7 +999,7 @@ begin
   end;
 end;
 
-procedure Spy_PostFree(self: Pointer; fSpyed: BOOL); stdcall;
+procedure TComAllocSpy.PostFree(fSpyed: BOOL);
 begin
 end;
 
@@ -970,13 +1008,18 @@ end;
  // ppNewRequest = pointer to be passed to underlying allocator
  // Result = byte count to be passed to underlying allocator
  //===================================================================================================================
-function Spy_PreRealloc(self: Pointer; pRequest: Pointer; NewSize: SIZE_T; out ppNewRequest: Pointer; fSpyed: BOOL): SIZE_T; stdcall;
+function TComAllocSpy.PreRealloc(pRequest: Pointer; NewSize: SIZE_T; out ppNewRequest: Pointer; fSpyed: BOOL): SIZE_T;
 var
   OldSize: _NativeUInt;
 begin
+  if not fSpyed then begin
+	ppNewRequest := pRequest;
+	exit(NewSize);
+  end;
+
   gRequestedSize := NewSize;
 
-  if fSpyed and (pRequest <> nil) then begin
+  if pRequest <> nil then begin
 
 	pRequest := ComMem.Dequeue(pRequest);
 	OldSize := PPreRec(pRequest)^.Size;
@@ -992,27 +1035,31 @@ begin
 end;
 
  // Result = pointer to be returned by IMalloc::Relloc
-function Spy_PostRealloc(self: Pointer; pActual: Pointer; fSpyed: BOOL): Pointer; stdcall;
+function TComAllocSpy.PostRealloc(pActual: Pointer; fSpyed: BOOL): Pointer;
 var
   NewSize: _NativeUInt;
   OldSize: _NativeUInt;
 begin
   Result := pActual;
 
-  // nil only occurs if COM could not allocate memory (out-of-memory):
-  if Result <> nil then begin
-	OldSize := PPreRec(Result)^.Size;
-	NewSize := gRequestedSize;
+  if fSpyed then begin
 
-	Result := ComMem.Enqueue(Result, NewSize);
+	// nil only occurs if COM could not allocate memory (out-of-memory):
+	if Result <> nil then begin
+	  OldSize := PPreRec(Result)^.Size;
+	  NewSize := gRequestedSize;
 
-	if NewSize > OldSize then begin
-	  // fill the newly allocated memory:
-	  FillChar((PByte(Result) + OldSize)^, NewSize - OldSize, MyAllocFillByte);
+	  Result := ComMem.Enqueue(Result, NewSize);
+
+	  if NewSize > OldSize then begin
+		// fill the newly allocated memory:
+		FillChar((PByte(Result) + OldSize)^, NewSize - OldSize, MyAllocFillByte);
+	  end;
+	end
+	else if MyBreakOnAllocationError then begin
+	  MyDebugBreak;
 	end;
-  end
-  else if MyBreakOnAllocationError then begin
-	MyDebugBreak;
+
   end;
 end;
 
@@ -1020,14 +1067,14 @@ end;
  //===================================================================================================================
  // Result = pointer to be passed to underlying allocator
  //===================================================================================================================
-function Spy_PreGetSize(self: Pointer; pRequest: Pointer; fSpyed: BOOL): Pointer; stdcall;
+function TComAllocSpy.PreGetSize(pRequest: Pointer; fSpyed: BOOL): Pointer;
 begin
   Result := pRequest;
   if fSpyed then Result := PByte(Result) - sizeof(TPreRec);
 end;
 
  // Result = byte count to be returned by IMalloc::GetSize
-function Spy_PostGetSize(self: Pointer; cbActual: SIZE_T; fSpyed: BOOL): SIZE_T; stdcall;
+function TComAllocSpy.PostGetSize(cbActual: SIZE_T; fSpyed: BOOL): SIZE_T;
 begin
   Result := cbActual;
   if fSpyed then Result := Result - sizeof(TPreRec) - sizeof(TPostRec);
@@ -1037,23 +1084,196 @@ end;
  //===================================================================================================================
  // Result = pointer to be passed to underlying allocator
  //===================================================================================================================
-function Spy_PreDidAlloc(self: Pointer; pRequest: Pointer; fSpyed: BOOL): Pointer; stdcall;
+function TComAllocSpy.PreDidAlloc(pRequest: Pointer; fSpyed: BOOL): Pointer;
 begin
   Result := pRequest;
   if fSpyed then Result := PByte(Result) - sizeof(TPreRec);
 end;
 
  // Result = value to be returned by IMalloc::DidAlloc (-1, 0, +1)
-function Spy_PostDidAlloc(self: Pointer; pRequest: Pointer; fSpyed: BOOL; fActual: Integer): Integer; stdcall;
+function TComAllocSpy.PostDidAlloc(pRequest: Pointer; fSpyed: BOOL; fActual: Integer): Integer;
 begin
   Result := fActual;
 end;
 
 
  //===================================================================================================================
+ // do nothing
  //===================================================================================================================
-procedure Spy_NoopHeapMinimize(self: Pointer); stdcall;
+procedure TComAllocSpy.NoopHeapMinimize;
 begin
+end;
+
+
+ //===================================================================================================================
+ // install COM memory monitoring:
+ //===================================================================================================================
+class procedure TComAllocSpy.Init;
+const
+  VMT: array [0..14] of Pointer =
+  (
+	@TComAllocSpy.QueryInterface,
+	@TComAllocSpy.AddRef,
+	@TComAllocSpy.Release,
+	@TComAllocSpy.PreAlloc,
+	@TComAllocSpy.PostAlloc,
+	@TComAllocSpy.PreFree,
+	@TComAllocSpy.PostFree,
+	@TComAllocSpy.PreRealloc,
+	@TComAllocSpy.PostRealloc,
+	@TComAllocSpy.PreGetSize,
+	@TComAllocSpy.PostGetSize,
+	@TComAllocSpy.PreDidAlloc,
+	@TComAllocSpy.PostDidAlloc,
+	@TComAllocSpy.NoopHeapMinimize,		// IMallocSpy.PreHeapMinimize
+	@TComAllocSpy.NoopHeapMinimize		// IMallocSpy.PostHeapMinimize
+  );
+
+  // static singleton COM object:
+  Obj: TComAllocSpy = (FVMT: @VMT);
+begin
+  // install COM memory monitoring:
+  CoRegisterMallocSpy(IMallocSpy(@Obj));
+
+  // turn off the BSTR cache in oleaut32.dll (runs slower, but makes allocations deterministic):
+  // https://devblogs.microsoft.com/oldnewthing/20150107-00/?p=43203
+  SetOaNoCache;
+end;
+
+
+ //===================================================================================================================
+ // revoke COM memory monitoring:
+ //===================================================================================================================
+class procedure TComAllocSpy.Fini;
+begin
+  // CoRevokeMallocSpy() returns E_ACCESSDENIED when there are outstanding allocations (not yet freed) made while this
+  // spy was active.
+  // Sadly, this is normal as combase.dll does not release some memory until it is unloaded during ExitProcess (which
+  // then finally calls Spy_Release).
+  CoRevokeMallocSpy;
+end;
+
+
+type
+  // structure to implement IInitializeSpy as a singleton object:
+  TComInitSpy = record
+  strict private
+	class var
+	  FCookie: ULARGE_INTEGER;
+	var
+	  FVMT: pointer;
+
+	function QueryInterface(const IID: TGUID; out Obj: pointer): HResult; stdcall;
+	function AddRef: Integer; stdcall;
+	function Release: Integer; stdcall;
+	function PreInitialize(dwCoInit: DWORD; dwCurThreadAptRefs: DWORD): HRESULT; stdcall;
+	function PostInitialize(hrCoInit: HRESULT; dwCoInit: DWORD; dwNewThreadAptRefs: DWORD): HRESULT; stdcall;
+	function PreUninitialize(dwCurThreadAptRefs: DWORD): HRESULT; stdcall;
+	function PostUninitialize(dwNewThreadAptRefs: DWORD): HRESULT; stdcall;
+  public
+	class procedure Init; static; inline;
+	class procedure Fini; static; inline;
+  end;
+
+
+{ TComInitSpy }
+
+ //===================================================================================================================
+ //===================================================================================================================
+function TComInitSpy.QueryInterface(const IID: TGUID; out Obj: pointer): HResult;
+begin
+  if IsEqualGUID(IID, IInitializeSpy) then begin
+	Obj := @self;
+	Result := S_OK;
+  end
+  else begin
+	Obj := nil;
+	Result := E_NOINTERFACE;
+  end;
+end;
+
+
+ //===================================================================================================================
+ // Is called before each of the IInitializeSpy calls
+ //===================================================================================================================
+function TComInitSpy.AddRef: Integer;
+begin
+  Result := 1;
+end;
+
+
+ //===================================================================================================================
+ // Is called after each of the IInitializeSpy calls
+ //===================================================================================================================
+function TComInitSpy.Release: Integer;
+begin
+  Result := 1;
+end;
+
+
+ //===================================================================================================================
+ //===================================================================================================================
+function TComInitSpy.PreInitialize(dwCoInit: DWORD; dwCurThreadAptRefs: DWORD): HRESULT;
+begin
+  Result := S_OK;
+end;
+
+
+ //===================================================================================================================
+ //===================================================================================================================
+function TComInitSpy.PostInitialize(hrCoInit: HRESULT; dwCoInit: DWORD; dwNewThreadAptRefs: DWORD): HRESULT;
+begin
+  if (hrCoInit = S_OK) or (hrCoInit = S_FALSE) then Windows.InterlockedIncrement(ComInitCount);
+  Result := hrCoInit;
+end;
+
+
+ //===================================================================================================================
+ //===================================================================================================================
+function TComInitSpy.PreUninitialize(dwCurThreadAptRefs: DWORD): HRESULT;
+begin
+  Windows.InterlockedDecrement(ComInitCount);
+  Result := S_OK;
+end;
+
+
+ //===================================================================================================================
+ //===================================================================================================================
+function TComInitSpy.PostUninitialize(dwNewThreadAptRefs: DWORD): HRESULT;
+begin
+  Result := S_OK;
+end;
+
+
+ //===================================================================================================================
+ // install COM initialization monitoring:
+ //===================================================================================================================
+class procedure TComInitSpy.Init;
+const
+  VMT: array [0..6] of Pointer =
+  (
+	@TComInitSpy.QueryInterface,
+	@TComInitSpy.AddRef,
+	@TComInitSpy.Release,
+	@TComInitSpy.PreInitialize,
+	@TComInitSpy.PostInitialize,
+	@TComInitSpy.PreUninitialize,
+	@TComInitSpy.PostUninitialize
+  );
+
+  // static singleton COM object:
+  Obj: TComInitSpy = (FVMT: @VMT);
+begin
+  CoRegisterInitializeSpy(IInitializeSpy(@Obj), FCookie);
+end;
+
+
+ //===================================================================================================================
+ // uninstall COM initialization monitoring (always succeeds):
+ //===================================================================================================================
+class procedure TComInitSpy.Fini;
+begin
+  CoRevokeInitializeSpy(FCookie);
 end;
 
 
@@ -1079,31 +1299,6 @@ const
 	RegisterExpectedMemoryLeak: MyRegisterExpectedMemoryLeak;
 	UnregisterExpectedMemoryLeak: MyUnregisterExpectedMemoryLeak;
   );
-
-  // VMT of a COM class implementing IMallocSpy:
-  IMallocSpyVMT: array [0..14] of Pointer =
-  (
-	@Spy_QueryInterface,		// IUnknown.QueryInterface
-	@Spy_AddRef,				// IUnknown._AddRef
-	@Spy_Release,				// IUnknown._Release
-	@Spy_PreAlloc,
-	@Spy_PostAlloc,
-	@Spy_PreFree,
-	@Spy_PostFree,
-	@Spy_PreRealloc,
-	@Spy_PostRealloc,
-	@Spy_PreGetSize,
-	@Spy_PostGetSize,
-	@Spy_PreDidAlloc,
-	@Spy_PostDidAlloc,
-	@Spy_NoopHeapMinimize,		// IMallocSpy.PreHeapMinimize
-	@Spy_NoopHeapMinimize		// IMallocSpy.PostHeapMinimize
-  );
-
-  // static singleton COM object which contains the VMT pointer as the only instance field:
-  MallocSpyObj: record VMT: Pointer; end = (VMT: @IMallocSpyVMT);
-
-  COINIT_APARTMENTTHREADED  = 2;      // Apartment model
 begin
   Assert(NoMemoryAllocated, 'Memory already allocated');
 
@@ -1111,12 +1306,11 @@ begin
   GetMemoryManager(OldMgr);
   SetMemoryManager(MemMgr);
 
-  // turn off the BSTR cache in oleaut32.dll (runs slower, but makes allocations deterministic):
-  // https://devblogs.microsoft.com/oldnewthing/20150107-00/?p=43203
-  SetOaNoCache;
-
   // install COM memory monitoring:
-  CoRegisterMallocSpy(IMallocSpy(@MallocSpyObj));
+  TComAllocSpy.Init;
+
+  // install COM initialization monitoring:
+  TComInitSpy.Init;
 end;
 
 
@@ -1127,15 +1321,18 @@ begin
   // report Delphi memory leaks:
   DelphiMem.CheckMemoryLeak(true);
 
-  // CoRevokeMallocSpy() returns E_ACCESSDENIED when there are outstanding allocations (not yet freed) made while this
-  // spy was active.
-  // Sadly, this is normal as combase.dll does not release some memory until it is unloaded during ExitProcess (which
-  // then finally calls Spy_Release).
-  CoRevokeMallocSpy();
-  //if CoRevokeMallocSpy() = E_ACCESSDENIED then ComMem.CheckMemoryLeak(false);
+  // uninstall COM initialization monitoring (always succeeds):
+  TComInitSpy.Fini;
+
+  // revoke COM memory monitoring
+  TComAllocSpy.Fini;
 
   // call the previous exit procedure:
   if Assigned(PrevExitProcessProc) then PrevExitProcessProc();
+
+  // the usage of IMAllocSpy triggers a bug in combase.dll when some DLLs are unloaded during ExitProcess
+  // => skip any further DLL unloading:
+  Windows.TerminateProcess(Windows.GetCurrentProcess, System.ExitCode);
 end;
 
 

@@ -22,7 +22,7 @@ unit Tasks;
   Properties of a thread which the task action can change and must then reset before returning:
   - COM initialization (default: not initialized)
   - Language setting (Windows GUI texts) (Default: same as process)
-  - Regional setting (formatting of numbers, date, etc.) (Default: like process)
+  - Regional setting (formatting of numbers, date, etc.) (Default: same as process)
   - Thread scheduling priority (default: standard)
   - Attachment to a Windows message queue (default: not attached)
   - Thread-local storage (TLS) (in Delphi: content of "threadvar" variables)
@@ -370,11 +370,13 @@ type
 	// If <CancelObj> is only set after <Action> has actually started, this has no effect on Perform.
 	// The return value is false if <Action> was not executed due to <CancelObj>, otherwise true is returned.
 	// It is guaranteed that <Action> will no longer run after Perform() has returned.
+	//
 	// Deadlock avoidance:
-	// If the GUI thread waits for a task that calls Perform, a deadlock occurs because both threads are waiting
-	// crosswise for each other. The GUI thread can only safely wait for a task if it has called ITask.CancelObj.Cancel
-	// for the respective task: This causes the Perform method to return immediately when called by this task, which in
-	// turn gives the task a chance to exit, which ultimately allows the GUI thread to get out of the wait call.
+	// If the GUI thread uses ITask.Wait, TThreadPool.Wait or TThreadPool.Destroy to wait for a task that calls Perform,
+	// a deadlock occurs because both threads are waiting crosswise for each other. The GUI thread can only safely wait
+	// for a task if it has called ITask.CancelObj.Cancel for the respective task: This causes the GUI-thread awaiting
+	// Perform method to return immediately, which in turn gives the task a chance to exit, which ultimately allows the
+	// GUI thread to get out of the wait call.
 	// Note: If this method is called by the GUI thread itself, <Action> is called without cross-thread synchronization,
 	// otherwise the behavior is identical.
 	class function Perform(Action: TGuiProc; CancelObj: ICancel): boolean; overload; static;
@@ -1132,6 +1134,7 @@ class function TGuiThread.Perform(Action: IGuiProcRef; CancelObj: ICancel): bool
 var
   ActionCtx: TActionCtx;
 begin
+  Assert(not System.IsConsole);
   Assert(Assigned(Action));
 
   if Windows.GetCurrentThreadId = System.MainThreadID then begin
@@ -1139,6 +1142,8 @@ begin
 	Action();
 	exit(true);
   end;
+
+  Assert(Assigned(CancelObj));
 
   ActionCtx.FAction := Action;
   ActionCtx.FDone := TEvent.Create(true);
