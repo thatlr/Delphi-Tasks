@@ -736,7 +736,7 @@ begin
 	if System.IsConsole or (Windows.GetCurrentThreadId <> System.MainThreadID) then
 	  self.CompleteWH.Wait(TimeoutMillisecs)
 	else
-	  self.GuiWait(self.CancelWH.Handle, TimeoutMillisecs);
+	  self.GuiWait(self.CompleteWH.Handle, TimeoutMillisecs);
   end;
 
   if ThrowOnError and Assigned(FUnhandledException) then
