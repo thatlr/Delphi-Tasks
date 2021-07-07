@@ -42,4 +42,3 @@ Tested with:
 ## Open issues:
 
 Some sensible demo code.
-Some grammatical mistakes in the comments.

@@ -7,7 +7,7 @@ unit Tasks;
 
   - TThreadPool: Implements a configurable thread pool and provides a default thread pool.
 
-  - TGuiThread: Allows any thread to inject calls into the GUI thread.
+  - TGuiThread: Provides methods that can be used any thread to inject calls into the GUI thread.
 
   General:
   - The Delphi debugger slows down the application and the IDE severely when threads are created / destroyed in rapid
@@ -17,12 +17,12 @@ unit Tasks;
   - The state of the ICancel object says nothing about *why* a task has ended. The action of the task can completely
 	ignore the ICancel object; the thread pool generally does not know why a task has voluntarily ended.
   - The injection of calls into the GUI thread is done in such a way that foreign Windows message loops (open menus,
-	standard Windows or other foreign message boxes, move + resize windows) do not prevent execution.
+	delphi-external modal dialogs or message boxes, move + resize windows) do not prevent execution.
 
   Properties of a thread which the task action can change and must then reset before returning:
   - COM initialization (default: not initialized)
   - Language setting (Windows GUI texts) (Default: same as process)
-  - Regional setting (formatting of numbers, date, etc.) (Default: same as process)
+  - Regional settings (formatting of numbers, date, etc.) (Default: same as process)
   - Thread scheduling priority (default: standard)
   - Attachment to a Windows message queue (default: not attached)
   - Thread-local storage (TLS) (in Delphi: content of "threadvar" variables)
@@ -31,19 +31,19 @@ unit Tasks;
   - Parameter MaxTaskQueueLength: The queue length for waiting tasks in the pool is basically unlimited and has no
 	influence on performance. The parameter can be used to synchronize the task generation rate with the task
 	processing rate in order not to have too many outstanding tasks (especially if the task actions contain resources
-	such as open sockets, via variables captured by anonymous functions).
-  - Parameter MaxThreads: If the tasks of a given pool do not or only rarely wait for external events or I/O operations
-	(i.e. require intensive computing time) and are "short", this value should be equal to the number of CPU cores
-	("logical processors") in the processor group of the process so that the available capacity is optimally used.
-	If the tasks are mostly waiting for events, the number of MaxThreads can be much higher.
+	such as open sockets).
+  - Parameter MaxThreads: If the tasks of a given pool do not or only rarely wait for external events like I/O
+	operations, this value should be equal to the number of CPU cores ("logical processors") in the processor group of
+	the process so that the available capacity is optimally used.
+	If the tasks wait for events more frequently, the number of MaxThreads can be much higher.
 	Note: A 32-bit process with the default thread stack size of 1 MB can have a maximum of approx. 2000 threads, but
 	up to approx. 12000 threads are possible with a smaller stack.
   - Parameter ThreadIdleMillisecs: Specifies the time after which an idle thread is automatically terminated. (A thread
 	can only be idle if there are no waiting tasks in the pool.)
   - Parameter StackSizeKB: When the stack of a thread reaches this size, the operating system throws an exception. The
 	standard stack size of all threads including the main thread is set in the Delphi project properties under "Linker".
-	The required size depends on how much space the local variables plus call parameters use in a call chain, in the
-	worst case. With external libraries (e.g. Oracle client), this can only be estimated and needs testing.
+	The required size depends on how much space the local variables plus call parameters use in any possible call chain.
+	With external libraries (e.g. Oracle client), this can only be estimated and needs testing.
 
 
   Example code:
@@ -100,9 +100,9 @@ type
   TWaitHandle = WindowsSynchronization.TWaitHandle;
 
 
-  // Processing status of a task. The status can only change from "pending" to one of the three termination statuses.
+  // Processing status of a task. The status can only change from "Pending" to one of the three termination statuses.
   // Pending: Starting state, processing is not yet finished.
-  // Completed: Processing was terminated without an exception, or it was terminated by EAbort.
+  // Completed: Processing was completed without an exception, or it was terminated by EAbort.
   // Failed: Processing was aborted by an unhandled exception.
   // Discarded: Aborted before the processing started, by thread pool shutdown.
   TTaskState = (Pending, Completed, Failed, Discarded);
@@ -110,11 +110,11 @@ type
 
   //===================================================================================================================
   // Represents an cancellation flag (similar to CancellationToken + CancellationTokenSource in .NET).
-  // This interface allows application code inside and outside of an running action to set an cancellation flag and to
-  // query it. The flag signals asynchronous actions that they should terminiate as soon as possible.
+  // This interface allows application code to set an cancellation flag and to/ query it. Generally, the flag signals
+  //  asynchronous actions that they should terminiate as soon as possible.
   // Once set, the flag cannot be reset.
-  // One and the same ICancel reference can be given to any number of tasks, and can be for any other purposes.
-  // (This interface is not specific for tasks.)
+  // One and the same ICancel reference can be given to any number of tasks, and can be also used by any other code in
+  // the application.
   // All interface methods are thread-safe.
   //===================================================================================================================
   ICancel = interface
@@ -123,13 +123,13 @@ type
 
 	// Can be called at any time by any thread to determine whether the cancellation flag has been set.
 	// This gives *no* information about whether some task or action has already reacted to it, nor if it was already
-	// finished when Cancel() was called.
+	// finished when the Cancel() method was called.
 	function IsCancelled: boolean;
 
-	// Can be called at any time by any thread to read a TWaitHandle reference in order to wait for the cancellation
+	// Can be called at any time by any thread to obtain a TWaitHandle reference in order to wait for the cancellation
 	// flag to be set.
-	// The caller may no longer use the supplied TWaitHandle reference if he no longer has the ICancel reference, since
-	// the TWaitHandle object can then already be released.
+	// The caller may no longer use the obtained TWaitHandle reference if he no longer owns the respective ICancel
+	// reference, since the TWaitHandle object can then already be released.
 	// The caller must not release the object.
 	function CancelWH: TWaitHandle;
   end;
@@ -137,7 +137,7 @@ type
 
   //===================================================================================================================
   // Represents an action passed to TThreadPool.Run() or TThreadPool.Queue() for asynchronous execution.
-  // The release of the ITask reference by the application has no effect on the processing of the task.
+  // The release of the ITask reference by the application does not affect the processing of the task.
   // All interface methods are thread-safe.
   //===================================================================================================================
   ITask = interface
@@ -145,19 +145,19 @@ type
 	// The status can only change from Pending to one of the three other statuses.
 	function State: TTaskState;
 
-	// Can be called by any thread at any time to read a TWaitHandle reference in order to wait for the end of the task.
-	// The caller may no longer use the delivered TWaitHandle reference if he no longer has the ITask reference, since
+	// Can be called by any thread at any time to obtain a TWaitHandle reference in order to wait for the end of the task.
+	// The caller may no longer use the obtained TWaitHandle reference when he no longer owns the ITask reference, since
 	// the TWaitHandle object can then already be released.
 	// The caller must not release the object.
 	function CompleteWH: TWaitHandle;
 
 	// Can be called at any time by any thread to determine whether the task was terminated by an unhandled exception,
-	// and if so, which one. Returns nil if no unhandled exception has occurred.
+	// and if so, which one. Returns nil if no unhandled exception has occurred so far.
 	// The caller must not release the object.
 	function UnhandledException: Exception;
 
-	// Can be called by any thread at any time to get a reference to the ICancel object assigned to the task. This
-	// reference can be used in any way you like.
+	// Can be called by any thread at any time to get the ICancel object assigned to the task. This reference can be
+	// used in any way you like.
 	function CancelObj: ICancel;
 
 	// Can be called by any thread (including the GUI thread) at any time to wait for the task to finish.
@@ -168,15 +168,16 @@ type
 	// When called from non-GUI thread:
 	//   The wait is completely passive and no Windows messages are processed.
 	// When called from the GUI thread:
-	//   Parallel to the waiting, paint and timer events are processed so that the GUI does not appear completely dead
-	//   if it takes longer. Exceptions from the paint or timer event processing are not intercepted regardless of
-	//   ThrowOnError, as these are not created by the task.  
+	//   Parallel to the waiting, paint and timer messages are processed so that the GUI does not appear completely dead
+	//   if the waiting takes longer. Exceptions from the paint or timer event processing are not intercepted regardless
+	//   of ThrowOnError, as these are not created by the task.
 	// Remarks for use in the GUI thread:
-	// - Since timer and paint Windows messages are processed while waiting, Delphi code may also be run through in
-	//   timer events or paint handlers.
-	// - As usual, after approx. 5 seconds the window will be "ghosted" by Windows ("no response" appears in the window
-	//   title bar and the window content is frozen by the system). In general, the method should therefore only be
-	//   used if the expected waiting time is short (for example, when the task has already been canceled).
+	// - Since timer and paint Windows messages are processed while waiting, Delphi code in the respective timer events
+	//	 or paint handlers will be executed by the GUI thread. Be aware of potential reentracy issues.
+	// - As usual, after waiting for approx. 5 seconds, all the GUI windows will be "ghosted" by Windows ("no response"
+	//   appears in the window title bar and the window content is frozen by the system). In general, the Wait method
+	//   should therefore only be called if the expected waiting time is shorter (for example, when the task has already
+	//   been canceled).
 	// - There are the following variants in the Windows API: CoWaitForMultipleObjects(), MsgWaitForMultipleObjects()
 	//   and WaitForMultipleObjects(). For special requirements, the caller himself should use CompleteHW.Handle with
 	//   one of these variants, specify the desired flags and react according to the respective return value.
@@ -186,29 +187,27 @@ type
 
 
   //===================================================================================================================
-  // References a named or anonymous method suitable for execution as a thread pool task.
+  // Referencess a named or anonymous method suitable for execution as a thread pool task.
   // (Note: There are the types Classes.TThreadMethod and Classes.TThreadProcedure used by the not-so-great standard
   // Delphi TThread class.)
   // Important:
   // The ITaskProcRef action must not call System.EndThread(), Windows.ExitThread() nor Windows.TerminateThread(), as
-  // this will cause memory leaks and unpredicatable behavior.
-  // Windows.SuspendThread can lead to dead-locks (for example, when the thread in the Memory Manager, this will deadlock
-  // the entire process) and is therefore also prohibited.
+  // this will cause memory leaks and unpredictable behavior.
+  // Windows.SuspendThread can lead to dead-locks (for example, when the thread is stoppped when inside the Memory
+  // Manager, this will deadlock the entire process) and is therefore also prohibited.
   //===================================================================================================================
   ITaskProcRef = reference to procedure (const CancelObj: ICancel);
 
   //===================================================================================================================
   // Same as ITaskProcRef, but avoids the lengthy compiler-generated code at the call site when a normal method is used.
-  // With instance methods, the caller must ensure that the object instance is not released while the task is running;
-  // class methods don't have this problem.
   //===================================================================================================================
   TTaskProc = procedure (const CancelObj: ICancel) of object;
 
 
   //===================================================================================================================
-  // Represents a thread pool with threads used exclusively by this pool.
+  // Represents a thread pool with threads that are used exclusively by this pool.
   // The pure creation of a TThreadPool object allocates *no* resources and *no* threads.
-  // Each TThreadpool instance is independent, there is no coordination across pools.
+  // Each TThreadpool instance is independent, there is no coordination between the pools.
   // All public methods (except Destroy) are thead-safe.
   //===================================================================================================================
   TThreadPool = class
@@ -217,7 +216,7 @@ type
 	  FDefaultPool: TThreadPool;
 
 	type
-	  ITask2 = interface;	// forward-declaration for SetNext and GetNext (needed at last for the D2009 compiler)
+	  ITask2 = interface;	// forward-declaration for SetNext and GetNext (needed at least for the D2009 compiler)
 
 	  // extends ITask with internal management methods.
 	  ITask2 = interface (ITask)
@@ -244,17 +243,17 @@ type
 	var
 	  FTaskQueue: TTaskQueue;						// linear list of waiting tasks
 	  FMaxWaitTasks: uint32;						// maximum length of <FTaskQueue>
-	  FThreadIdleMillisecs: uint32;					// Time after which an idle thread terminates itself
-	  FStackSize: uint32;							// parameter for CreateThread()
+	  FThreadIdleMillisecs: uint32;					// time after which an idle thread terminates itself
+	  FStackSize: uint32;							// parameter for CreateThread(): thread stack size, in bytes
 	  FLock: TSlimRWLock;							// serializes Get/Put together with FItemAvail and FSpaceAvail
-	  FItemAvail: WinSlimLock.TConditionVariable;	// for Get
-	  FSpaceAvail: WinSlimLock.TConditionVariable;	// for Put
-	  FIdle: WinSlimLock.TConditionVariable;		// Destroy: "no threads", Wait: "no tasks"
-	  FDestroying: boolean;							// is set by Destroy so that no more new tasks are accepted (default thread pool!)
+	  FItemAvail: WinSlimLock.TConditionVariable;	// condition for Get
+	  FSpaceAvail: WinSlimLock.TConditionVariable;	// condition for Put
+	  FIdle: WinSlimLock.TConditionVariable;		// condition for Destroy: "no threads", Wait: "no tasks"
+	  FDestroying: boolean;							// is set by Destroy so that no more new tasks are accepted (important for the default thread pool)
 	  FThreads: record
-		TotalMax: uint32;			// static: total number of threads allowed in this thread pool
-		TotalCount: uint32;			// current: Threads in the thread pool
-		IdleCount: uint32;			// current: Idle threads, i.e. threads waiting for work inside Get()
+		TotalMax: uint32;							// static: total number of threads allowed in this thread pool
+		TotalCount: uint32;							// current number of threads in the thread pool
+		IdleCount: uint32;							// current number of idle threads, i.e. threads waiting for work inside Get()
 	  end;
 
 	class function OsThreadFunc(self: TThreadPool): integer; static;
@@ -263,15 +262,16 @@ type
 	function Get: ITask2;
 
   public
-	// Performes TThreadPool.Queue(<Action>,<CancelObj>) for the default thread pool.
+	// This calls the Queue() method for the default thread pool.
 	// The default thread pool has the following properties:
 	//  MaxThreads=2000, MaxTaskQueueLength=2^32, ThreadIdleMillisecs=15000, StackSizeKB=0
-	// This means that every task within the reasonable limits (i.e. up to 2000) is processed immediately by a thread.
-	// The default thread pool is therefore suitable for individual ad hoc actions (reliable immediate start of the
-	// action), but not for massively parallel algorithms that would bring the pool close to MaxThreads and thereby
-	// delay ad hoc actions.
+	// This means that every task is processed immediately, within reasonable limits (i.e. up to 2000 threads).
+	// The default thread pool is therefore suitable for ad-hoc tasks (reliable immediate start of the task), but not
+	// for massively parallel algorithms that generate many tasks and/or a high CPU load per task. That would bring the
+	// pool close to MaxThreads and thereby delay ad-hoc tasks, or it would lead to constant threads switches in order
+	// to process all tasks in parallel.
 	// For massively parallel things, a separate pool should be created that has a very limited number of threads (e.g.
-	// MaxThreads = number of CPU cores) and a queue that is sensibly limited (e.g. MaxTaskQueueLength = 4 * MaxThreads).
+	// MaxThreads = number of CPU cores) and a reasonably limited task queue (e.g. MaxTaskQueueLength = 4 * MaxThreads).
 	class function Run(Action: TTaskProc; CancelObj: ICancel = nil): ITask; overload;
 	class function Run(const Action: ITaskProcRef; CancelObj: ICancel = nil): ITask; overload;
 
@@ -280,33 +280,36 @@ type
 	// - MaxTaskQueueLength: Maximum number of tasks waiting to be processed by a pool thread (at least 1).
 	// - ThreadIdleMillisecs: Time in milliseconds after which idle threads automatically terminate (INFINITE is not
 	//   supported).
-	// - StackSizeKB: Stack size of the threads in kilobytes. 0 means stack size is the same as for the main thread
+	// - StackSizeKB: Stack size of the threads in kilobytes. 0 means the stack size is the same as for the main thread
 	//   (which is defined in the Delphi linker settings).
-	// The caller becomes the owner of the pool, and must release it at the appropriate time.
+	// The caller becomes the owner of the pool and must release it at the appropriate time.
 	// The release is *not* thread-safe, but can be done by any thread as long as it does not belong to this pool itself.
 	// The Destroy method does not return until all threads in the pool have terminated.
 	constructor Create(MaxThreads, MaxTaskQueueLength, ThreadIdleMillisecs, StackSizeKB: uint32);
 	destructor Destroy; override;
 
-	// Can be called by any thread at any time in order to transfer <Action> to this thread pool for processing by a
-	// thread as soon as possible.
+	// Can be called by any thread at any time in order to assign <Action> to this thread pool and return an ITask
+	// reference that can be used by the application to monitor or control the task.
 	// As long as the task queue has not yet reached its maximum length, the method returns immediately; otherwise it
 	// waits until a place in the task queue has become free.
-	// If the number of running threads in the pool has not yet reached the maximum, <Action> is guaranteed to be
-	// processed by a thread immediately; otherwise, <Action> remains in the queue until a thread is available.
+	// If the number of running threads in the pool has not yet reached the maximum, the task is guaranteed to be
+	// processed immediately; otherwise, the task waits in the queue until a thread becomes available or until shutdown
+	// of the pool.
 	// <CancelObj> can be any ICancel reference; if nil is passed, an ICancel object is automatically provided
 	// (accessible via ITask.CancelObj).
-	// The EAbort exception can be used within <Action> to end the task early using the usual exception mechanism. In
-	// this case, ITask.Status is set to Completed, analogous to a normal voluntary termination of the task.
+	// Exceptions can be used within <Action> to terminate the task early. When the task is ended by EAbort, ITask.Status
+	// is set to TTaskState.Completed, as for normal termination of the task. Other exceptions cause ITask.Status to be
+	// set to TTaskState.Failed.
 	// Note: If a pool task tries to create another task in the same pool, but there is no more space in the task queue,
 	// the operation blocks until another task terminates. This can cause a deadlock.
 	function Queue(Action: TTaskProc; CancelObj: ICancel = nil): ITask; overload;
 	function Queue(const Action: ITaskProcRef; CancelObj: ICancel = nil): ITask; overload;
 
 	// Can be called by any thread at any time in order to wait for the completion of all tasks in this thread pool.
-	// If other threads are able to create new tasks at any time (requirement: they have access to this thread pool),
-	// "completion of all tasks" is a purely temporary state.
+	// If other threads are able to create new tasks at any time, "completion of all tasks" is a purely temporary state.
 	// The status of the pool is not changed by this call.
+	// Since there is no timeout, the application logic must ensure that the wait returns (e.g. by using an ICancel that
+	// is observed by all tasks in the pool).
 	procedure Wait;
 
 	property ThreadsTotal: uint32 read FThreads.TotalCount;
@@ -315,14 +318,12 @@ type
 
 
   //===================================================================================================================
-  // References a named or anonymous method suitable for execution by TGuiThread.Perform ().
+  // References a named or anonymous method suitable for execution by TGuiThread.Perform().
   //===================================================================================================================
   IGuiProcRef = reference to procedure;
 
   //===================================================================================================================
   // Same as IGuiProcRef, but avoids the lengthy compiler-generated code at the call site when using a named method.
-  // With instance methods, the caller must ensure that the object instance is not released as long as the task may
-  // call this method; class methods don't have this problem.
   //===================================================================================================================
   TGuiProc = procedure of object;
 
@@ -336,6 +337,7 @@ type
 	type
 	  self = TGuiThread;
 
+	  // type of a local variable inside Perform(): forms a queue of waiting calls
 	  PActionCtx = ^TActionCtx;
 	  TActionCtx = record
 		FAction: IGuiProcRef;
@@ -355,30 +357,30 @@ type
 
 	class var
 	  FHook: HHOOK;
-	  FQueue: TQueue;					// Perform() => MsgHook() (list consists of local TActionCtx variables!)
+	  FQueue: TQueue;					// queue for transferring calls from Perform() to MsgHook()
 	  FQueueLock: TSlimRWLock;			// serializes access to FQueue 
 	class function MsgHook(code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT; stdcall; static;
   private
 	class procedure UninstallHook; static;
   public
-	// This method causes the GUI thread <Action> to execute. To do this, Perform waits until the GUI thread wants to
-	// take a Windows message from its message queue and lets it execute <Action> at this point in time.
+	// This method causes the GUI thread to execute <Action>. To do this, Perform waits until the GUI thread wants to
+	// extract a Windows message from its message queue and lets it execute <Action> at this point in time.
 	// In general, <CancelObj> should be the cancel object of the Perform-calling task (see the following note on
 	// avoiding deadlocks).
 	// If <CancelObj> is set already before the actual start of <Action>, the GUI thread will not be waited for and
 	// Perform returns without <Action> being executed.
 	// If <CancelObj> is only set after <Action> has actually started, this has no effect on Perform.
-	// The return value is false if <Action> was not executed due to <CancelObj>, otherwise true is returned.
+	// The return value is false if <Action> was not executed due to <CancelObj>, otherwise true.
 	// It is guaranteed that <Action> will no longer run after Perform() has returned.
 	//
 	// Deadlock avoidance:
 	// If the GUI thread uses ITask.Wait, TThreadPool.Wait or TThreadPool.Destroy to wait for a task that calls Perform,
 	// a deadlock occurs because both threads are waiting crosswise for each other. The GUI thread can only safely wait
-	// for a task if it has called ITask.CancelObj.Cancel for the respective task: This causes the GUI-thread awaiting
-	// Perform method to return immediately, which in turn gives the task a chance to exit, which ultimately allows the
-	// GUI thread to get out of the wait call.
-	// Note: If this method is called by the GUI thread itself, <Action> is called without cross-thread synchronization,
-	// otherwise the behavior is identical.
+	// for tasks if it has already called ITask.CancelObj.Cancel for the respective tasks: This causes the Perform
+	// method (called by one such task) to return immediately, which in turn gives the task a chance to exit, which
+	// ultimately allows the GUI thread to get out of the wait call.
+	// Note: If this method is called by the GUI thread itself, <Action> is just called, without cross-thread
+	// synchronization, and true is returned.
 	class function Perform(Action: TGuiProc; CancelObj: ICancel): boolean; overload; static;
 	class function Perform(Action: IGuiProcRef; CancelObj: ICancel): boolean; overload; static;
   end;
@@ -440,8 +442,8 @@ type
   TTaskWrapper = class sealed (TCancelFlag, TThreadPool.ITask2)
   strict private
 	FAction: ITaskProcRef;					// application function to be executed
-	FUnhandledException: TObject;			// Exception that occurred during the execution of FAction (), set if FState = Failed
-	FCancelObj: ICancel;					// Reference to explicitly given (i.e. external) CancelObj, otherwise nil
+	FUnhandledException: TObject;			// exception that occurred during the execution of FAction(), set if FState = Failed
+	FCancelObj: ICancel;					// reference to explicitly provided CancelObj, otherwise nil
 	FCompleteHandle: TEvent;				// is only generated when ITask.CompleteWH is called
 	FNext: TThreadPool.ITask2;				// used by TTaskQueue
 	FState: TTaskState;						// result of the task processing, is only set once
@@ -475,8 +477,8 @@ var
   tmp: TEvent;
 begin
   tmp := TEvent.Create(true);
-  // always returns the original value of FWaitHandle, but only changes it if it was nil:
-  // FWaitHandle was not nil => other thread was faster here => its TEvent is now used:
+  // always returns the original value of <Event>, but only changes it if it was nil:
+  // Event was not nil => other thread was faster => its TEvent is now used:
   if Windows.InterlockedCompareExchangePointer(pointer(Event), tmp, nil) <> nil then tmp.Free;
 end;
 
@@ -587,7 +589,7 @@ function TCancelFlag.CancelWH: TWaitHandle;
 begin
   if not Assigned(FWaitHandle) then begin
 	ProvideEvent(FWaitHandle);
-	// put the status of FCancelled into the (possibly) new event before a reference to it is returned:
+	// put the status of FCancelled into the (possibly) new event:
 	if FCancelled then FWaitHandle.SetEvent;
   end;
   Result := FWaitHandle;
@@ -630,11 +632,15 @@ begin
   Assert(not Assigned(FCompleteHandle) or not FCompleteHandle.IsSignaled);
 
   try
-	// only 32bit: always start with the default FPU configuration (idiotically there is also a global, non-thread-specific
-	// variable Default8087CW):
+
+	// only 32bit: always start with the default FPU configuration (idiotically there is also a global,
+	// non-thread-specific variable Default8087CW):
 	{$ifdef Win32} System.Set8087CW(DefaultFpuCfg);	{$endif}
-	// always start with the default SSE configuration (same nonsense with the global, non-thread-specific variable DefaultMXCSR):
+
+	// always start with the default SSE configuration (same nonsense with the global, non-thread-specific variable
+	// DefaultMXCSR):
 	{$if declared(SetMXCSR)} System.SetMXCSR(DefaultSseCfg); {$ifend}
+
 	try
 	  FAction(self.CancelObj);
 	finally
@@ -642,6 +648,7 @@ begin
 	  FAction := nil;
 	end;
 	FState := TTaskState.Completed;
+
   except
 	on EAbort do FState := TTaskState.Completed; // treat EAbort as a voluntary termination
 	else begin
@@ -702,7 +709,7 @@ function TTaskWrapper.CompleteWH: TWaitHandle;
 begin
   if not Assigned(FCompleteHandle) then begin
 	ProvideEvent(FCompleteHandle);
-	// put the status of ITask.State into the (possibly) new event before a reference to it is returned:
+	// put the status of ITask.State into the (possibly) new event:
 	if FState <> TTaskState.Pending then FCompleteHandle.SetEvent;
   end;
   Result := FCompleteHandle;
@@ -859,27 +866,26 @@ end;
 
 
  //===================================================================================================================
- // Returns the thread pool. First of all, all tasks not yet started are discarded. After that, it waits for all threads
- // to finish. 
+ // Destroys the thread pool: First, all tasks not yet started are discarded. After that, it waits for all threads
+ // to finish (the processsing of their respective task).
  // When Destroy is called, no other thread in the application may continue to use this thread pool object (as always
  // with Destroy). If, after entering Destroy, an attempt is made to create new tasks in this pool, these are discarded
- // right away. This application malfunction can occur with the standard thread pool because circular unit references
- // can lead to an unclear situation as to when the standard thread pool will be released.
+ // right away. This application malfunction can occur with the default thread pool because circular unit references
+ // can lead to an unclear situation as to when the default thread pool will be destroyed.
  //===================================================================================================================
 destructor TThreadPool.Destroy;
 begin
   // no longer accept new tasks (default thread pool!):
   FDestroying := true;
 
-  // threads that go idle should terminate immediately (normally no more tasks and threads should be created, but it
-  // is possible that a running task still creates new tasks in this pool):
+  // threads that go idle should terminate immediately:
   FThreadIdleMillisecs := 0;
 
   // wake up all threads waiting in Get(), so that they see the new FThreadIdleMillisecs value:
   TSlimRWLock.WakeAllConditionVariable(FItemAvail);
 
   FLock.AcquireExclusive;
-  // cancel all tasks that have not yet started (for faster completion in the case of accumulated tasks):
+  // cancel all tasks that have not yet started (for faster completion if many tasks have accumulated):
   while FTaskQueue.Count <> 0 do FTaskQueue.Extract.Discard;
   // wait until no more threads are active (similar to .Wait):
   while FThreads.TotalCount <> 0 do FLock.SleepConditionVariable(FIdle, INFINITE, 0);
@@ -900,6 +906,7 @@ end;
  //===================================================================================================================
 procedure TThreadPool.Wait;
 begin
+  // could be AcquireShared/ReleaseShared (but it would be the only place, so nothing is gained):
   FLock.AcquireExclusive;
   while (FThreads.IdleCount < FThreads.TotalCount) or (FTaskQueue.Count <> 0) do FLock.SleepConditionVariable(FIdle, INFINITE, 0);
   FLock.ReleaseExclusive;
@@ -957,8 +964,8 @@ end;
 
  //===================================================================================================================
  // Waits until a task is available in the queue and returns it.
- // If the timeout occurred while waiting, nil is returned. Otherwise the next object from the queue is returned, which
- // now belongs to the caller.
+ // If the idle timeout occurred while waiting, nil is returned. Otherwise the next object from the queue is returned,
+ // which now belongs to the caller.
  //===================================================================================================================
 function TThreadPool.Get: ITask2;
 var
@@ -978,12 +985,12 @@ begin
 	  if FThreads.IdleCount = FThreads.TotalCount then TSlimRWLock.WakeAllConditionVariable(FIdle);
 	  // during SleepConditionVariable() other threads can take the lock
 	  if (FThreadIdleMillisecs = 0) or not FLock.SleepConditionVariable(FItemAvail, EndTime.AsMilliSecs, 0) then begin
-		// Timeout occurred => thread must *not* terminate if there are waiting tasks, since Put () then assumes that this thread is idle.
+		// Timeout occurred => thread must *not* terminate if there are waiting tasks, since Put() then assumes that this thread is idle.
 		if FTaskQueue.Count <> 0 then break;
 		// calling thread will terminate:
 		dec(FThreads.TotalCount);
 		dec(FThreads.IdleCount);
-		// wake up the destructor when there is no more thread:
+		// wake up the destructor when there are no more threads:
 		if FThreads.TotalCount = 0 then TSlimRWLock.WakeAllConditionVariable(FIdle);
 		exit(nil);
 	  end;
@@ -1022,7 +1029,7 @@ end;
 
 
  //===================================================================================================================
- // Creates an OS thread that immediately starts executing TThreadPool.ThreadWrapper.
+ // Creates an OS thread that immediately starts executing TThreadPool.OsThreadFunc.
  // MaxStackSize:
  //   If not zero, this defines the space reserved for the stack in the address area of the process (in bytes).
  //   If zero, the maximum stack size from the Exeutable header is used (Project Options -> Delphi Compiler -> Linking -> Maximum Stack Size).
@@ -1042,7 +1049,7 @@ end;
 
 
  //===================================================================================================================
- // Is executed in the created thread and calls ITask.Execute.
+ // Is executed in each pool thread and calls ITask.Execute.
  //===================================================================================================================
 class function TThreadPool.OsThreadFunc(self: TThreadPool): integer;
 var
@@ -1057,7 +1064,7 @@ begin
 	if not Assigned(Task) then break;
 
 	// - Task.Execute must not call Windows.ExitThread() or System.EndThread().
-	// - Task.Execute must not throw exceptions.
+	// - Task.Execute must catch all exceptions.
 	Task.Execute;
 
 	// release reference now:
@@ -1096,7 +1103,7 @@ end;
 
 
  //===================================================================================================================
- // Extract the given item from the queue. Returns true if found and extracted, else false.
+ // Extract the given item from the queue. Returns true if the item is found and extracted, else false.
  //===================================================================================================================
 function TGuiThread.TQueue.Dequeue(Item: PActionCtx): boolean;
 var
@@ -1167,13 +1174,13 @@ begin
 	// trigger the hook in the GUI thread:
 	Windows.PostThreadMessage(System.MainThreadID, WM_NULL, 0, 0);
 
-	// Just waiting for ActionCtx.FDone would cause a deadlock if the GUI thread is calling TThreadPool.Destroy or
+	// Waiting only for ActionCtx.FDone would cause a deadlock if the GUI thread is calling TThreadPool.Destroy or
 	// TThreadPool.Wait, since both do not execute the message hook!
 
 	if TWaitHandle.WaitAny([ActionCtx.FDone.Handle, CancelObj.CancelWH.Handle], INFINITE) = 0 then
 	  exit(true);
 
-	// if still in the queue then remove and return false:
+	// if still the action in the queue then remove it and return false:
 	FQueueLock.AcquireExclusive;
 	try
 	  if FQueue.Dequeue(@ActionCtx) then exit(false);
@@ -1181,7 +1188,7 @@ begin
 	  FQueueLock.ReleaseExclusive;
 	end;
 
-	// GUI thread is performing the action => just wait:
+	// GUI thread is already executing the action => just wait:
 	ActionCtx.FDone.Wait(INFINITE);
 	Result := true;
 
@@ -1192,8 +1199,8 @@ end;
 
 
  //===================================================================================================================
- // Is executed in the thread for which this message hook was registered and reacts specifically to the Windows message
- // generated by Perform().
+ // Is executed in the thread for which this message hook was registered (System.MainThreadID) and reacts specifically
+ // to the WM_NULL message generated by Perform().
  //===================================================================================================================
 class function TGuiThread.MsgHook(code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT;
 var
