@@ -470,7 +470,7 @@ type
 
  //===================================================================================================================
  // Ensures that all loads and stores of this CPU core are finished before subsequent loads and stores are performed.
- // This is not about cache consistency (as x86 has MESI as cache-coherene protocol), but about data prefetch due to
+ // This is not about cache consistency (as x86 has MESI as cache-coherence protocol), but about data prefetch due to
  // instruction pipelining.
  // https://newbedev.com/can-i-force-cache-coherency-on-a-multicore-x86-cpu
  // https://stackoverflow.com/questions/27595595/when-are-x86-lfence-sfence-and-mfence-instructions-required
