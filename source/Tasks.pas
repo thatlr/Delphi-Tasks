@@ -469,6 +469,20 @@ type
 
 
  //===================================================================================================================
+ // Ensures that all loads and stores of this CPU core are finished before subsequent loads and stores are performed.
+ // This is not about cache consistency (as x86 has MESI as cache-coherene protocol), but about data prefetch due to
+ // instruction pipelining.
+ // https://newbedev.com/can-i-force-cache-coherency-on-a-multicore-x86-cpu
+ // https://stackoverflow.com/questions/27595595/when-are-x86-lfence-sfence-and-mfence-instructions-required
+ // https://www.intel.com/content/www/us/en/architecture-and-technology/64-ia-32-architectures-software-developer-vol-2b-manual.html
+ //===================================================================================================================
+procedure CompleteMemoryBarrier;
+asm
+  MFENCE
+end;
+
+
+ //===================================================================================================================
  // Ensures in a thread-safe manner that <Event> contains a TEvent object after the call.
  // If <Event> is set in parallel by another thread, the object created first is retained.
  //===================================================================================================================
@@ -567,6 +581,7 @@ end;
 procedure TCancelFlag.Cancel;
 begin
   FCancelled := true;
+  CompleteMemoryBarrier;
   // only after setting FCancelled, otherwise CancelWH() might miss the true value:
   if Assigned(FWaitHandle) then FWaitHandle.SetEvent;
 end;
@@ -659,6 +674,7 @@ begin
   end;
 
   // only *after* setting FState:
+  CompleteMemoryBarrier;
   if Assigned(FCompleteHandle) then FCompleteHandle.SetEvent;
 end;
 
@@ -670,6 +686,8 @@ procedure TTaskWrapper.Discard;
 begin
   Assert(FState = TTaskState.Pending);
   FState := TTaskState.Discarded;
+  CompleteMemoryBarrier;
+  if Assigned(FCompleteHandle) then FCompleteHandle.SetEvent;
 end;
 
 
@@ -840,8 +858,13 @@ end;
  //===================================================================================================================
  //===================================================================================================================
 class function TThreadPool.Run(const Action: ITaskProcRef; CancelObj: ICancel = nil): ITask;
+var
+  tmp: TThreadPool;
 begin
-  if not Assigned(FDefaultPool) then FDefaultPool := TThreadPool.Create(2000, High(uint32), 15000, 0);
+  if not Assigned(FDefaultPool) then begin
+	tmp := TThreadPool.Create(2000, High(uint32), 15000, 0);
+	if Windows.InterlockedCompareExchangePointer(pointer(FDefaultPool), tmp, nil) <> nil then tmp.Free;
+  end;
   Result := FDefaultPool.Queue(Action, CancelObj);
 end;
 
