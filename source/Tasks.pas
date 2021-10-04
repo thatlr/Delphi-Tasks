@@ -45,6 +45,19 @@ unit Tasks;
 	The required size depends on how much space the local variables plus call parameters use in any possible call chain.
 	With external libraries (e.g. Oracle client), this can only be estimated and needs testing.
 
+  Memory Barriers:
+  - System.MemoryBarrier is identical to MemoryBarrier() in WinNT.h and about 30% faster than the MFENCE instruction.
+	https://docs.microsoft.com/vi-vn/windows/win32/api/winnt/nf-winnt-memorybarrier.
+  - Without MemoryBarrier(), the lazy-initialized events are not always set.
+  - MemoryBarrier() ensures that all loads and stores of this CPU core are finished before subsequent loads and stores
+	are performed. This is not about cache consistency (as x86 has MESI as cache-coherence protocol), but about data
+	prefetch due to instruction pipelining and delayed write to memory/L1 cache from the core's store buffer.
+	https://stackoverflow.com/questions/27595595/when-are-x86-lfence-sfence-and-mfence-instructions-required
+	https://newbedev.com/can-i-force-cache-coherency-on-a-multicore-x86-cpu
+	https://newbedev.com/which-is-a-better-write-barrier-on-x86-lock-addl-or-xchgl
+	https://newbedev.com/race-condition-on-x86
+	https://bartoszmilewski.com/2008/11/05/who-ordered-memory-fences-on-an-x86/
+	https://www.intel.com/content/www/us/en/architecture-and-technology/64-ia-32-architectures-software-developer-vol-2b-manual.html
 
   Example code:
 
@@ -469,20 +482,6 @@ type
 
 
  //===================================================================================================================
- // Ensures that all loads and stores of this CPU core are finished before subsequent loads and stores are performed.
- // This is not about cache consistency (as x86 has MESI as cache-coherence protocol), but about data prefetch due to
- // instruction pipelining.
- // https://newbedev.com/can-i-force-cache-coherency-on-a-multicore-x86-cpu
- // https://stackoverflow.com/questions/27595595/when-are-x86-lfence-sfence-and-mfence-instructions-required
- // https://www.intel.com/content/www/us/en/architecture-and-technology/64-ia-32-architectures-software-developer-vol-2b-manual.html
- //===================================================================================================================
-procedure CompleteMemoryBarrier;
-asm
-  MFENCE
-end;
-
-
- //===================================================================================================================
  // Ensures in a thread-safe manner that <Event> contains a TEvent object after the call.
  // If <Event> is set in parallel by another thread, the object created first is retained.
  //===================================================================================================================
@@ -581,7 +580,7 @@ end;
 procedure TCancelFlag.Cancel;
 begin
   FCancelled := true;
-  CompleteMemoryBarrier;
+  System.MemoryBarrier;
   // only after setting FCancelled, otherwise CancelWH() might miss the true value:
   if Assigned(FWaitHandle) then FWaitHandle.SetEvent;
 end;
@@ -674,7 +673,7 @@ begin
   end;
 
   // only *after* setting FState:
-  CompleteMemoryBarrier;
+  System.MemoryBarrier;
   if Assigned(FCompleteHandle) then FCompleteHandle.SetEvent;
 end;
 
@@ -686,7 +685,7 @@ procedure TTaskWrapper.Discard;
 begin
   Assert(FState = TTaskState.Pending);
   FState := TTaskState.Discarded;
-  CompleteMemoryBarrier;
+  System.MemoryBarrier;
   if Assigned(FCompleteHandle) then FCompleteHandle.SetEvent;
 end;
 
