@@ -9,6 +9,7 @@ unit WindowsSynchronization;
   - TFileHandle: represents a handle for which the value INVALID_HANDLE_VALUE is invalid.
   - TEvent: represents a Windows event (https://docs.microsoft.com/en-us/windows/win32/sync/using-event-objects)
   - TWaitableTimer: represents a Timer (https://docs.microsoft.com/en-us/windows/win32/sync/using-waitable-timer-objects).
+  - TMutex: represents a Mutex (https://docs.microsoft.com/en-us/windows/win32/sync/using-mutex-objects).
 }
 
 
@@ -93,7 +94,7 @@ type
   end;
 
 
-  // How Create/Open functions work regarding named synchronization objects:
+  // How CreateNamed constructors work regarding named synchronization objects:
   THandleOpenMode = (
 	homOpen,			// the Windows object must already exist, otherwise an exception is thrown
 	homCreateNew,		// the Windows object must not yet exist, otherwise an exception is thrown
@@ -137,9 +138,6 @@ type
   TMutex = class(TNonFileHandle)
   public
 	// Creates an anonymous unowned Windows Mutex object.
-	// If {InitialOwner} is false, the object is signaled and not owned by any thread.
-	// If {InitialOwner} is true, the calling thread owns the newly created mutex and must later release it to allow
-	// other threads go grab it.
 	constructor Create;
 
 	// Createas a named unowned Windows Mutex object.
@@ -168,10 +166,10 @@ type
 	constructor Create(ManualReset: boolean);
 
 	// Starts or restarts the timer with the given parameters.
-	// FirstTimeMilliSeconds: If non-zero, the timer is set to 'not signaled'. It will become 'signaled' after this
+	// FirstTimeMilliSeconds: If non-zero, the timer is set to 'not signaled' and it will become 'signaled' after this
 	// time has elapsed; if zero, the timer is immediately set to 'signaled'.
 	// RepeatTimeMilliSeconds: If not zero, the timer is restarted automatically after each expiration.
-	// (without changing the signaled state).
+	// (this restart does not reset the signaled state).
 	procedure Start(FirstTimeMilliSeconds: uint32; RepeatTimeMilliSeconds: uint32 = 0);
 
 	// Stops the timer. The signaled state of the timer object is *not* changed.
@@ -193,7 +191,6 @@ uses
 
 const
   TicksPerMillisec = int64(10 * 1000);		// 100ns intervals per ms
-  TicksPerDay = 24 * 60 * 60 * 1000 * TicksPerMillisec;
 
 
 { TWaitHandle }
@@ -258,7 +255,7 @@ end;
  //===================================================================================================================
 class function TWaitHandle.WaitAny(const Handles: array of THandle; const Timeout: TTimeoutTime): integer;
 begin
-  Result := self.WaitAny(Handles, Timeout.AsMilliSecs);
+  Result := self.WaitMultiple(Handles, Timeout.AsMilliSecs, false);
 end;
 
 
@@ -274,7 +271,7 @@ end;
  //===================================================================================================================
 class function TWaitHandle.WaitAll(const Handles: array of THandle; const Timeout: TTimeoutTime): boolean;
 begin
-  Result := self.WaitAll(Handles, Timeout.AsMilliSecs);
+  Result := self.WaitMultiple(Handles, Timeout.AsMilliSecs, true) <> -1;
 end;
 
 
@@ -366,12 +363,14 @@ end;
  //===================================================================================================================
  //===================================================================================================================
 procedure TWaitableTimer.Reset;
+const
+  TicksPerDay = 24 * 60 * 60 * 1000 * TicksPerMillisec;
 var
   DueTimeArg: int64;
 begin
   DueTimeArg := -TicksPerDay;
 
-  // to reset the signaled state, a non-null dummy period must be set briefly:
+  // to reset the signaled state (without signaling it when currently non-signaled!), a non-null dummy period must be set briefly:
   Win32Check(
 		Windows.SetWaitableTimer(FHandle, DueTimeArg, 0, nil, nil, false)
 	and Windows.CancelWaitableTimer(FHandle)
@@ -381,7 +380,7 @@ end;
 
 { TEvent }
 
-{$if not declared (CreateEventEx)}
+{$if not declared(CreateEventEx)}
 function CreateEventEx(
 	lpMutexAttributes: PSecurityAttributes;
 	lpName: PChar;
@@ -454,14 +453,13 @@ end;
 
 { TMutex }
 
-{$if not declared (CreateMutexEx)}
+// better prototype than in WinApi.Windows:
 function CreateMutexEx(
 	lpMutexAttributes: PSecurityAttributes;
 	lpName: PChar;
 	dwFlags: DWORD;
 	dwDesiredAccess: DWORD
   ): THandle; stdcall; external Windows.kernel32 name {$ifdef UNICODE}'CreateMutexExW'{$else}'CreateMutexExA'{$endif};
-{$ifend}
 
 
  //===================================================================================================================
