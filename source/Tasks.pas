@@ -404,6 +404,15 @@ type
   end;
 
 
+// Like System.SetMXCSR, but does NOT change the global variable System.DefaultMXCSR.
+procedure SetMXCSR(NewValue: uint32);
+procedure ResetMXCSR; inline;
+
+// Like System.Set8087CW, but does NOT change the global variable System.Default8087CW.
+procedure Set8087CW(NewValue: Word);
+procedure Reset8087CW; inline;
+
+
 {############################################################################}
 implementation
 {############################################################################}
@@ -457,6 +466,66 @@ begin
   // always returns the original value of <Event>, but only changes it if it was nil:
   // Event was not nil => other thread was faster => its TEvent is now used:
   if Windows.InterlockedCompareExchangePointer(pointer(Event), tmp, nil) <> nil then tmp.Free;
+end;
+
+
+ //===================================================================================================================
+ // Sets the value of the MMX/SSE control register, without affecting System.DefaultMXCSR.
+ //===================================================================================================================
+procedure SetMXCSR(NewValue: uint32);
+asm
+  {$if sizeof(pointer) = 8}
+  AND     ECX, $FFC0	// Remove flag bits
+  PUSH    RCX			// push QWORD with the MXCSR value in the lower DWORD
+  LDMXCSR [RSP]			// load MXCSR from the top-most stack dword
+  POP     RCX			// deallocate QWORD
+  {$else}
+  AND     EAX, $FFC0	// Remove flag bits
+  PUSH    EAX			// push DWORD with the MXCSR value
+  LDMXCSR [ESP]			// load MXCSR from the top-most stack dword
+  POP     EAX			// deallocate DWORD
+  {$ifend}
+end;
+
+
+ //===================================================================================================================
+ // Resets the value of the MMX/SSE control register to default value used by Delphi.
+ //===================================================================================================================
+procedure ResetMXCSR;
+const
+  DefaultSseCfg = $1900;	// Start value of System.DefaultMXCSR
+begin
+  SetMXCSR(DefaultSseCfg);
+end;
+
+
+ //===================================================================================================================
+ // Sets the value of the 8087 control word, without affecting System.Default8087CW.
+ //===================================================================================================================
+procedure Set8087CW(NewValue: Word);
+asm
+  {$if sizeof(pointer) = 8}
+  PUSH    RCX			// push QWORD with the MXCSR value in the lower WORD
+  FNCLEX				// don't raise pending exceptions enabled by the new flags
+  FLDCW   [RSP]			// load CW from top-most stack word
+  POP     RCX			// deallocate QWORD
+  {$else}
+  PUSH    AX			// push WORD with the MXCSR value
+  FNCLEX				// don't raise pending exceptions enabled by the new flags
+  FLDCW   [ESP]			// load CW from top-most stack word
+  POP     AX			// deallocate WORD
+  {$ifend}
+end;
+
+
+ //===================================================================================================================
+ // Resets the value of the 8087 control word to default value used by Delphi.
+ //===================================================================================================================
+procedure Reset8087CW;
+const
+  DefaultFpuCfg = $1332;	// Start value of System.Default8087CW
+begin
+  Set8087CW(DefaultFpuCfg);
 end;
 
 
@@ -601,23 +670,16 @@ end;
  // Implements ITask2.Execute: Method is executed in the pool thread. It is only called once at most.
  //===================================================================================================================
 procedure TTaskWrapper.Execute;
-const
-  DefaultFpuCfg = $1332;	// Start value of System.Default8087CW
-  DefaultSseCfg = $1900;	// Start value of System.DefaultMXCSR
 begin
   Assert(FState = TTaskState.Pending);
   Assert(not Assigned(FUnhandledException));
   Assert(not Assigned(FCompleteHandle) or not FCompleteHandle.IsSignaled);
 
   try
-
-	// only 32bit: always start with the default FPU configuration (idiotically there is also a global,
-	// non-thread-specific variable Default8087CW):
-	{$ifdef Win32} System.Set8087CW(DefaultFpuCfg);	{$endif}
-
-	// always start with the default SSE configuration (same nonsense with the global, non-thread-specific variable
-	// DefaultMXCSR):
-	{$if declared(SetMXCSR)} System.SetMXCSR(DefaultSseCfg); {$ifend}
+	// always start task with the default FPU configuration:
+	Reset8087CW;
+	// always start task with the default SSE configuration (we assume that any CPU executing Windows 7 or above supports SSE):
+	ResetMXCSR;
 
 	try
 	  FAction(self.CancelObj);
@@ -1241,9 +1303,63 @@ begin
 end;
 
 
+{$if not declared(PF_XMMI_INSTRUCTIONS_AVAILABLE)}
+// not defined in Delphi 2009:
+const
+  PF_FLOATING_POINT_PRECISION_ERRATA         =  0;
+  PF_FLOATING_POINT_EMULATED                 =  1;
+  PF_COMPARE_EXCHANGE_DOUBLE                 =  2;
+  PF_MMX_INSTRUCTIONS_AVAILABLE              =  3;
+  PF_PPC_MOVEMEM_64BIT_OK                    =  4;
+  PF_ALPHA_BYTE_INSTRUCTIONS                 =  5;
+  PF_XMMI_INSTRUCTIONS_AVAILABLE             =  6;
+  PF_3DNOW_INSTRUCTIONS_AVAILABLE            =  7;
+  PF_RDTSC_INSTRUCTION_AVAILABLE             =  8;
+  PF_PAE_ENABLED                             =  9;
+  PF_XMMI64_INSTRUCTIONS_AVAILABLE           = 10;
+  PF_SSE_DAZ_MODE_AVAILABLE                  = 11;
+  PF_NX_ENABLED                              = 12;
+  PF_SSE3_INSTRUCTIONS_AVAILABLE             = 13;
+  PF_COMPARE_EXCHANGE128                     = 14;
+  PF_COMPARE64_EXCHANGE128                   = 15;
+  PF_CHANNELS_ENABLED                        = 16;
+  PF_XSAVE_ENABLED                           = 17;
+  PF_ARM_VFP_32_REGISTERS_AVAILABLE          = 18;
+  PF_ARM_NEON_INSTRUCTIONS_AVAILABLE         = 19;
+  PF_SECOND_LEVEL_ADDRESS_TRANSLATION        = 20;
+  PF_VIRT_FIRMWARE_ENABLED                   = 21;
+  PF_RDWRFSGSBASE_AVAILABLE                  = 22;
+  PF_FASTFAIL_AVAILABLE                      = 23;
+  PF_ARM_DIVIDE_INSTRUCTION_AVAILABLE        = 24;
+  PF_ARM_64BIT_LOADSTORE_ATOMIC              = 25;
+  PF_ARM_EXTERNAL_CACHE_AVAILABLE            = 26;
+  PF_ARM_FMAC_INSTRUCTIONS_AVAILABLE         = 27;
+  PF_RDRAND_INSTRUCTION_AVAILABLE            = 28;
+  PF_ARM_V8_INSTRUCTIONS_AVAILABLE           = 29;
+  PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE    = 30;
+  PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE     = 31;
+  PF_RDTSCP_INSTRUCTION_AVAILABLE            = 32;
+  PF_RDPID_INSTRUCTION_AVAILABLE             = 33;
+  PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE   = 34;
+  PF_MONITORX_INSTRUCTION_AVAILABLE          = 35;
+  PF_SSSE3_INSTRUCTIONS_AVAILABLE            = 36;
+  PF_SSE4_1_INSTRUCTIONS_AVAILABLE           = 37;
+  PF_SSE4_2_INSTRUCTIONS_AVAILABLE           = 38;
+  PF_AVX_INSTRUCTIONS_AVAILABLE              = 39;
+  PF_AVX2_INSTRUCTIONS_AVAILABLE             = 40;
+  PF_AVX512F_INSTRUCTIONS_AVAILABLE          = 41;
+{$ifend}
+
+
 initialization
+  {$if sizeof(pointer) = 4}
+	// In TTaskWrapper.Execute, we assume that the CPU supports SSE (only SSE, not SSE2), which is true since Pentium 3
+	// (1999).
+	// x86: Theoretically unsupported => Assert
+	// x64: Supported by all CPUs.
+	Assert(Windows.IsProcessorFeaturePresent(PF_XMMI_INSTRUCTIONS_AVAILABLE));
+  {$ifend}
 finalization
   TThreadPool.FDefaultPool.Free;
   TGuiThread.UninstallHook;
 end.
-
