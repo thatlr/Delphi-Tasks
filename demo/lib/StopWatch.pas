@@ -15,12 +15,13 @@ type
   //=============================================================================
   TStopWatch = record
   strict private
-	FCounts: int64;
-	function GetElapsed: double;
+	class var
+	  FCountsPerSecond: int64;
+	var
+	  FStartCounts: int64;
   public
 	procedure Start;
-	procedure Stop;
-	property ElapsedSecs: double read GetElapsed;
+	function ElapsedSecs: double;
   end;
 
 
@@ -34,37 +35,26 @@ uses Windows;
 { TStopWatch }
 
  //=============================================================================
- // Starts the measurement.
+ // Starts the measurement, by capturing the current point-in-time.
  //=============================================================================
 procedure TStopWatch.Start;
 begin
   // On systems that run Windows XP or later, the function will always succeed:
-  Windows.QueryPerformanceCounter(FCounts);
-end;
-
-
- //=============================================================================
- // Stops the measurement.
- //=============================================================================
-procedure TStopWatch.Stop;
-var
-  EndCount: int64;
-begin
-  Windows.QueryPerformanceCounter(EndCount);
-  FCounts := EndCount - FCounts;
-end;
-
-
- //=============================================================================
- // Returns the duration from Start() to Stop().
- //=============================================================================
-function TStopWatch.GetElapsed: double;
-var
-  CountsPerSecond: int64;
-begin
+  if FCountsPerSecond = 0 then Windows.QueryPerformanceFrequency(FCountsPerSecond);
   // On systems that run Windows XP or later, the function will always succeed:
-  Windows.QueryPerformanceFrequency(CountsPerSecond);
-  Result := FCounts / CountsPerSecond;
+  Windows.QueryPerformanceCounter(FStartCounts);
+end;
+
+
+ //=============================================================================
+ // Returns the time elapsed since Start() was called. Can be called repeatly.
+ //=============================================================================
+function TStopWatch.ElapsedSecs: double;
+var
+  EndCounts: int64;
+begin
+  Windows.QueryPerformanceCounter(EndCounts);
+  Result := (EndCounts - FStartCounts) / FCountsPerSecond;
 end;
 
 end.
