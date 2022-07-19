@@ -1,9 +1,0 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<BorlandProject>
-  <Transactions>
-    <Transaction>2021.06.10 17:41:37.613.groupproj,C:\Users\inrtu\OneDrive - Covestro\Dokumente\RAD Studio\Projects\ProjectGroup1.groupproj=C:\Entwicklung\CovestroLib\Experimental\TaskTest\TaskDemo.groupproj</Transaction>
-  </Transactions>
-  <Default.Personality>
-    <Projects ActiveProject="TaskDemo.exe"/>
-  </Default.Personality>
-</BorlandProject>

@@ -1,13 +1,13 @@
 unit Tasks;
 
 {
+  General thread-pool implementation. For interaction of tasks with the GUI, also include the unit "GuiTasks".
+
   - ICancel: Reference to an object that serves as an cancellation flag.
 
   - ITask: Reference to an action passed to a thread pool for asynchronous execution.
 
   - TThreadPool: Implements a configurable thread pool and provides a default thread pool.
-
-  - TGuiThread: Provides methods that can be used by any thread to inject calls into the GUI thread.
 
   General notes:
   - The Delphi debugger slows down the application and the IDE severely when threads are created / destroyed in rapid
@@ -52,18 +52,19 @@ unit Tasks;
 
   Use of Memory Barriers:
   - System.MemoryBarrier is identical to MemoryBarrier() in WinNT.h and about 30% faster than the MFENCE instruction.
-	https://docs.microsoft.com/vi-vn/windows/win32/api/winnt/nf-winnt-memorybarrier.
   - Without MemoryBarrier(), the lazy-initialized events are not always set.
-  - MemoryBarrier() ensures that all loads and stores of this CPU core are finished before subsequent loads and stores
-	are performed. This is not about cache consistency (as x86 has MESI as cache-coherence protocol), but about delayed
-	write to memory/L1 cache from the core's store buffer.
-	https://stackoverflow.com/questions/27595595/when-are-x86-lfence-sfence-and-mfence-instructions-required
-	https://newbedev.com/can-i-force-cache-coherency-on-a-multicore-x86-cpu
+  - MemoryBarrier() ensures that all stores of this CPU core are visible to other cores when the call returns.
+	As x86 has MESI as cache-coherence protocol, this is not about cache consistency, but about delayed write to
+	memory/L1 cache from the core's store buffer.
+
 	https://newbedev.com/which-is-a-better-write-barrier-on-x86-lock-addl-or-xchgl
 	https://newbedev.com/race-condition-on-x86
 	https://bartoszmilewski.com/2008/11/05/who-ordered-memory-fences-on-an-x86/
-	https://www.intel.com/content/www/us/en/architecture-and-technology/64-ia-32-architectures-software-developer-vol-2b-manual.html
+	https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2b-manual.pdf
 	https://docs.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-memorybarrier
+	https://prog.world/weak-memory-models-write-buffering-on-x86/
+	https://preshing.com/20120515/memory-reordering-caught-in-the-act/
+	https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf
 }
 
 
@@ -72,7 +73,7 @@ unit Tasks;
 
 interface
 
-uses Windows, WinSlimLock, WindowsSynchronization, SysUtils;
+uses WinSlimLock, WindowsSynchronization, SysUtils;
 
 type
   TWaitHandle = WindowsSynchronization.TWaitHandle;
@@ -239,6 +240,13 @@ type
 	function Get: ITask2;
 
   public
+	class var
+	  // To not pull-in most of the VCL code, this is to be provided by another unit:
+	  // Used when the GUI thread calls ITask.Wait. Should wait until <Handle> gets signaled.
+	  // May throw exceptions.
+	  GuiWaitFor: procedure (Handle: THandle; TimeoutMillisecs: uint32);
+
+  public
 	// Queues the action to the default thread pool and returns the respective ITask reference.
 	// The default thread pool has the following properties:
 	//  MaxThreads=2000, MaxTaskQueueLength=2^32, ThreadIdleMillisecs=15000, StackSizeKB=0
@@ -291,75 +299,6 @@ type
 
 	property ThreadsTotal: uint32 read FThreads.TotalCount;
 	property ThreadsIdle: uint32 read FThreads.IdleCount;
-  end;
-
-
-  //===================================================================================================================
-  // References a named or anonymous method/function/procedure suitable for execution by TGuiThread.Perform().
-  //===================================================================================================================
-  IGuiProcRef = reference to procedure;
-
-  //===================================================================================================================
-  // Same as IGuiProcRef, but avoids the lengthy compiler-generated code at the call site when using a named method.
-  //===================================================================================================================
-  TGuiProc = procedure of object;
-
-
-  //===================================================================================================================
-  // Represents the GUI thread (or the main thread of the program according to System.MainThreadID).
-  // All public methods are thread-safe.
-  //===================================================================================================================
-  TGuiThread = record
-  strict private
-	type
-	  self = TGuiThread;
-
-	  // type of a local variable inside Perform(): forms a queue of waiting calls
-	  PActionCtx = ^TActionCtx;
-	  TActionCtx = record
-		FAction: IGuiProcRef;
-		FNext: PActionCtx;
-		FDone: TEvent;
-	  end;
-
-	  TQueue = record
-	  strict private
-		FFirst: PActionCtx;
-		FLast: PActionCtx;
-	  public
-		procedure Append(Item: PActionCtx); inline;
-		function Extract: PActionCtx; inline;
-		function Dequeue(Item: PActionCtx): boolean;
-	  end;
-
-	class var
-	  FHook: HHOOK;
-	  FQueue: TQueue;					// queue for transferring calls from Perform() to MsgHook()
-	  FQueueLock: TSlimRWLock;			// serializes access to FQueue 
-	class function MsgHook(Code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT; stdcall; static;
-  private
-	class procedure UninstallHook; static;
-  public
-	// This method causes the GUI thread to execute <Action>. To do this, Perform waits until the GUI thread wants to
-	// extract a Windows message from its message queue and lets it execute <Action> at this point in time.
-	// <CancelObj> should be the cancel object of the Perform-calling task (see the following note on avoiding
-	// deadlocks).
-	// If <CancelObj> is set already before the actual start of <Action>, the GUI thread will not be waited for and
-	// Perform returns without <Action> being executed.
-	// If <CancelObj> is set after the actual start of <Action>, this has no effect on Perform.
-	// The return value is false if <Action> was not executed due to <CancelObj>, otherwise true.
-	// It is guaranteed that <Action> will no longer run after Perform() has returned.
-	//
-	// Deadlock avoidance:
-	// If the GUI thread uses ITask.Wait, TThreadPool.Wait or TThreadPool.Destroy to wait for a task that calls Perform,
-	// a deadlock occurs because both threads are waiting crosswise for each other. The GUI thread can only safely wait
-	// for tasks if it has already called ITask.CancelObj.Cancel for the respective tasks: This causes the Perform
-	// method (called by one such task) to return immediately, which in turn gives the task a chance to exit, which
-	// ultimately allows the GUI thread to get out of the wait call.
-	// Note: If this method is called by the GUI thread itself, <Action> is just called, without cross-thread
-	// synchronization, and true is returned.
-	class function Perform(Action: TGuiProc; CancelObj: ICancel): boolean; overload; static;
-	class function Perform(Action: IGuiProcRef; CancelObj: ICancel): boolean; overload; static;
   end;
 
 
@@ -417,7 +356,7 @@ procedure Reset8087CW; inline;
 implementation
 {############################################################################}
 
-uses Messages, Classes, TimeoutUtil;
+uses Windows, TimeoutUtil;
 
 type
   //===================================================================================================================
@@ -433,7 +372,6 @@ type
 	FCompleteHandle: TEvent;				// is only generated when ITask.CompleteWH is called
 	FNext: TThreadPool.ITask2;				// used by TTaskQueue
 	FState: TTaskState;						// result of the task processing, is only set once
-	class procedure GuiWait(h: THandle; TimeoutMillisecs: uint32); static;
   private
 	// >> ITask
 	function State: TTaskState;
@@ -787,55 +725,16 @@ end;
 function TTaskWrapper.Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean;
 begin
   if FState = TTaskState.Pending then begin
-	if System.IsConsole or (Windows.GetCurrentThreadId <> System.MainThreadID) then
+	if not Assigned(TThreadPool.GuiWaitFor) or System.IsConsole or (Windows.GetCurrentThreadId <> System.MainThreadID) then
 	  self.CompleteWH.Wait(TimeoutMillisecs)
 	else
-	  self.GuiWait(self.CompleteWH.Handle, TimeoutMillisecs);
+	  TThreadPool.GuiWaitFor(self.CompleteWH.Handle, TimeoutMillisecs);
   end;
 
   if ThrowOnError and Assigned(FUnhandledException) then
 	raise Exception.Create(self.UnhandledException.Message);
 
   Result := FState <> TTaskState.Pending;
-end;
-
-
- //===================================================================================================================
- // Internal helper used by ITask.Wait() for the GUI thread to wait for the task's termination, but simultaneously
- // process a limited range of Windows messages (timer, paint, asynchronously sent messages).
- // (asynchronously sent messages are messages create by PostThreadMessage() or PostMessage(NULL, ...)). 
- //===================================================================================================================
-class procedure TTaskWrapper.GuiWait(h: THandle; TimeoutMillisecs: uint32);
-
-  // returns true when h is signaled or the timeout is reached:
-  function _Wait(h: THandle; const Timeout: TTimeoutTime): boolean;
-  var
-	MilliSecs: uint32;
-  begin
-	if TimeoutMillisecs = INFINITE then MilliSecs := INFINITE else MilliSecs := Timeout.AsMilliSecs;
-	case Windows.MsgWaitForMultipleObjects(1, h, false, MilliSecs, QS_PAINT or QS_TIMER or QS_POSTMESSAGE) of
-	WAIT_OBJECT_0, WAIT_TIMEOUT: Result := true;
-	else Result := false;
-	end;
-  end;
-
-var
-  t: TTimeoutTime;
-  Msg: TMsg;
-begin
-  t := TTimeoutTime.FromMillisecs(TimeoutMillisecs);
-
-  // processes the next WM_PAINT, WM_TIMER or posted message; may throw exceptions during this processing:
-  // https://devblogs.microsoft.com/oldnewthing/tag/modality
-  repeat
-
-	while Windows.PeekMessage(Msg, 0, WM_PAINT, WM_PAINT, PM_REMOVE)
-	  or Windows.PeekMessage(Msg, 0, WM_TIMER, WM_TIMER, PM_REMOVE)
-	  or Windows.PeekMessage(Msg, HWND(-1), 0, 0, PM_REMOVE)
-	do
-	  Windows.DispatchMessage(Msg);
-
-  until _Wait(h, t);
 end;
 
 
@@ -874,6 +773,7 @@ end;
 { TThreadPool }
 
  //===================================================================================================================
+ // See description in interface section.
  //===================================================================================================================
 class function TThreadPool.Run(Action: TTaskProc; CancelObj: ICancel = nil): ITask;
 var
@@ -885,6 +785,7 @@ end;
 
 
  //===================================================================================================================
+ // See description in interface section.
  //===================================================================================================================
 class function TThreadPool.Run(const Action: ITaskProcRef; CancelObj: ICancel = nil): ITask;
 var
@@ -899,6 +800,7 @@ end;
 
 
  //===================================================================================================================
+ // See description in interface section.
  //===================================================================================================================
 constructor TThreadPool.Create(MaxThreads, MaxTaskQueueLength, ThreadIdleMillisecs, StackSizeKB: uint32);
 begin
@@ -954,7 +856,7 @@ end;
 
 
  //===================================================================================================================
- // Implements TThreadPool.Wait: see description there.
+ // See description in interface section.
  //===================================================================================================================
 procedure TThreadPool.Wait;
 begin
@@ -1061,7 +963,7 @@ end;
 
 
  //===================================================================================================================
- // Implements TThreadPool.Queue: see description there.
+ // See description in interface section.
  //===================================================================================================================
 function TThreadPool.Queue(const Action: ITaskProcRef; CancelObj: ICancel): ITask;
 begin
@@ -1070,7 +972,7 @@ end;
 
 
  //===================================================================================================================
- // Implements TThreadPool.Queue: see description there.
+ // See description in interface section.
  //===================================================================================================================
 function TThreadPool.Queue(Action: TTaskProc; CancelObj: ICancel): ITask;
 begin
@@ -1127,187 +1029,6 @@ begin
 end;
 
 
-{ TGuiThread.TQueue }
-
- //===================================================================================================================
- // Append the item the the end of the queue.
- //===================================================================================================================
-procedure TGuiThread.TQueue.Append(Item: PActionCtx);
-begin
-  if FFirst = nil then FFirst := Item
-  else FLast.FNext := Item;
-  FLast := Item;
-end;
-
-
- //===================================================================================================================
- // Extract the first item from the queue. Returns nil is the queue is empty.
- //===================================================================================================================
-function TGuiThread.TQueue.Extract: PActionCtx;
-begin
-  Result := FFirst;
-  if Result <> nil then begin
-	FFirst := Result.FNext;
-  end;
-end;
-
-
- //===================================================================================================================
- // Extract the given item from the queue. Returns true if the item is found and extracted, else false.
- //===================================================================================================================
-function TGuiThread.TQueue.Dequeue(Item: PActionCtx): boolean;
-var
-  tmp: ^PActionCtx;
-begin
-  tmp := @FFirst;
-  while tmp^ <> nil do begin
-	if tmp^ = Item then begin
-	  // found => dequeue:
-	  tmp^ := tmp^^.FNext;
-	  exit(true);
-	end;
-	tmp := @tmp^^.FNext;
-  end;
-  exit(false)
-end;
-
-
-{ TGuiThread }
-
- //===================================================================================================================
- //===================================================================================================================
-class function TGuiThread.Perform(Action: TGuiProc; CancelObj: ICancel): boolean;
-var
-  tmp: IGuiProcRef;
-begin
-  tmp := Action;
-  Result := self.Perform(tmp, CancelObj);
-end;
-
-
- //===================================================================================================================
- //===================================================================================================================
-class function TGuiThread.Perform(Action: IGuiProcRef; CancelObj: ICancel): boolean;
-var
-  ActionCtx: TActionCtx;
-begin
-  Assert(not System.IsConsole);
-  Assert(Assigned(Action));
-
-  if Windows.GetCurrentThreadId = System.MainThreadID then begin
-	// called from the GUI thread => no synchronisation needed:
-	Action();
-	exit(true);
-  end;
-
-  Assert(Assigned(CancelObj));
-
-  ActionCtx.FAction := Action;
-  ActionCtx.FDone := TEvent.Create(true);
-  ActionCtx.FNext := nil;
-
-  try
-
-	// append to work queue:
-
-	FQueueLock.AcquireExclusive;
-	try
-	  if FHook = 0 then begin
-		FHook := Windows.SetWindowsHookEx(WH_GETMESSAGE, self.MsgHook, 0, System.MainThreadID);
-	  end;
-
-	  FQueue.Append(@ActionCtx);
-	finally
-	  FQueueLock.ReleaseExclusive;
-	end;
-
-	// trigger the hook in the GUI thread:
-	Windows.PostThreadMessage(System.MainThreadID, WM_NULL, 0, 0);
-
-	// Waiting only for ActionCtx.FDone would cause a deadlock if the GUI thread is calling TThreadPool.Destroy or
-	// TThreadPool.Wait, since both do not execute the message hook!
-
-	if TWaitHandle.WaitAny([ActionCtx.FDone.Handle, CancelObj.CancelWH.Handle], INFINITE) = 0 then
-	  exit(true);
-
-	// if the action is still in the queue then remove it and return false:
-	FQueueLock.AcquireExclusive;
-	try
-	  if FQueue.Dequeue(@ActionCtx) then exit(false);
-	finally
-	  FQueueLock.ReleaseExclusive;
-	end;
-
-	// GUI thread is already executing the action => just wait:
-	ActionCtx.FDone.Wait(INFINITE);
-	Result := true;
-
-  finally
-	ActionCtx.FDone.Free;
-  end;
-end;
-
-
- //===================================================================================================================
- // Is executed in the thread for which this message hook was registered (System.MainThreadID) and reacts specifically
- // to the WM_NULL message generated by Perform().
- //===================================================================================================================
-class function TGuiThread.MsgHook(Code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT;
-var
-  ActionCtx: PActionCtx;
-begin
-  Assert(Windows.GetCurrentThreadId = System.MainThreadID);
-
-  // <Code> values other than HC_ACTION are only possible with WH_JOURNALPLAYBACK and WH_JOURNALRECORD hooks, not with
-  // WH_GETMESSAGE.
-
-  // only react to WM_NULL messages sent via PostThreadMessage() (not to every message):
-  if (Code = HC_ACTION) and (wParam = PM_REMOVE) and (PMsg(lParam).hwnd = 0) and (PMsg(lParam).message = WM_NULL) then begin
-
-	FQueueLock.AcquireExclusive;
-	try
-	  ActionCtx := FQueue.Extract;
-	finally
-	  FQueueLock.ReleaseExclusive;
-	end;
-
-	if ActionCtx <> nil then begin
-
-	  try
-
-		try
-		  ActionCtx.FAction();
-		finally
-		  ActionCtx.FDone.SetEvent;
-		end;
-
-	  except
-		if Assigned(Classes.ApplicationHandleException) then
-		  // this ultimately calls TApplication.HandleException() in GUI applications:
-		  Classes.ApplicationHandleException(nil)
-		else
-		  // like what SysUtils assigns to System.ExceptProc (i.e. SysUtils.ExceptHandler), but without Halt(1):
-		  SysUtils.ShowException(System.ExceptObject, System.ExceptAddr);
-	  end;
-
-	end;
-  end;
-
-  Result := Windows.CallNextHookEx(0, Code, wParam, lParam);
-end;
-
-
- //===================================================================================================================
- //===================================================================================================================
-class procedure TGuiThread.UninstallHook;
-begin
-  if FHook <> 0 then begin
-	Windows.UnhookWindowsHookEx(FHook);
-	FHook := 0;
-  end;
-end;
-
-
 {$if not declared(PF_XMMI_INSTRUCTIONS_AVAILABLE)}
 // not defined in Delphi 2009:
 const
@@ -1325,5 +1046,4 @@ initialization
   {$ifend}
 finalization
   TThreadPool.FDefaultPool.Free;
-  TGuiThread.UninstallHook;
 end.

@@ -11,7 +11,8 @@ uses
   Windows,
   Forms,
   MainForm in 'MainForm.pas' {fMainForm},
-  TaskUtils in 'TaskUtils.pas';
+  TaskUtils in 'TaskUtils.pas',
+  MsgBox in 'MsgBox.pas';
 
 {$R *.res}
 

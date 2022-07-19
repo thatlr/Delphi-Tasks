@@ -18,7 +18,7 @@ interface
 
 uses
   Windows, Messages, SysUtils, Classes, Graphics, Controls, Forms, Dialogs, StdCtrls, ExtCtrls, Menus,
-  Tasks;
+  Tasks, GuiTasks;
 
 type
   TfMainForm = class(TForm)
@@ -37,12 +37,12 @@ type
     procedure btOpenMsgBoxClick(Sender: TObject);
   private
 	FPool: TThreadPool;
+	FTask: ITask;
 	FCancel: ICancel;
 	procedure UpdateGui(const CancelObj: ICancel; ThreadNum: integer);
 	procedure PrimeTest(const CancelObj: ICancel);
 
 	class function IsPrime(N: Integer): boolean;
-	procedure ShowMsgBox(const Msg: string);
   end;
 
 var
@@ -55,18 +55,17 @@ implementation
 uses
   AppEvnts,
   StdLib,
+  MsgBox,
   StopWatch,
   TaskUtils;
 
 {$R *.dfm}
-
 
  //===================================================================================================================
  //===================================================================================================================
 procedure TfMainForm.FormActivate(Sender: TObject);
 {
 var
-  Pool: TThreadPool;
   Task: ITask;
 }
 begin
@@ -84,13 +83,13 @@ begin
   Assert(Task.State = TTaskState.Failed);
   Assert(Task.UnhandledException <> nil);
 
-  self.ShowInfo('%s', [Task.UnhandledException.StackTrace]);
+  TMsgBox.Show(Task.UnhandledException.StackTrace);
 }
 
   // create one single cancellation object for all tasks created by this form:
   FCancel := TCancelFlag.Create;
 
-  // create a thread pool specifically for the color-changing tasks (only to demonstrate the deadlock-free destructor of it)
+  // create a thread pool with two tasks:
   FPool := TThreadPool.Create(3, 10000, 1000, 64);
 
   FPool.Queue(
@@ -109,7 +108,8 @@ begin
 	FCancel
   );
 
-  FPool.Queue(
+  // create another task in the default thread pool:
+  FTask := TThreadPool.Run(
 	procedure (const CancelObj: ICancel)
 	begin
 	  UpdateGui(CancelObj, 3);
@@ -124,22 +124,17 @@ end;
 procedure TfMainForm.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
   self.ModalResult := mrCancel;
-  // terminate all tasks executing methods of this form:
+
+  // terminate all tasks running in the context of this form:
   FCancel.Cancel;
+
+  // wait for this task with reduced message-processing:
+  FTask.Wait;
+
   // The thread pool destructor waits for all its tasks to finish. To prevent a deadlock here, it is mandatory that all
   // this tasks use FCancel, and FCancel is set at this point. (This would not apply if the tasks in question do not
   // call TGuiThread.Perform().)
   FreeObj(FPool);
-end;
-
-
- //===================================================================================================================
- // Show <Msg> using the standard Windows message box. This is an example of an external Windows component that uses
- // its own modal message loop that does not interact with Delphi.
- //===================================================================================================================
-procedure TfMainForm.ShowMsgBox(const Msg: string);
-begin
-  Windows.MessageBox(self.Handle, PChar(Msg), 'Native modal message box', MB_ICONINFORMATION or MB_OK);
 end;
 
 
@@ -216,6 +211,7 @@ const
 var
   total: int32;
   Watch: TStopWatch;
+  Seconds: double;
 begin
   Watch.Start;
 
@@ -226,12 +222,12 @@ begin
   // Under the hoods, this employs a temporary thread pool which only allows the given number of threads to run in
   // parallel.
   // Personally, I don't think that things like that are a good programming practice, as the overhead is still too
-  // high for real "high-performance computing". One should not starting a high number of unknown tasks without taking
-  // the nature of the tasks into account (by using a generic ForEachInt method). At the very least, when something is
+  // high for real "high-performance computing". One should not create a high number of some tasks (by using a
+  // generic ForEach method) without taking the nature of the tasks into account. At the very least, when something is
   // supposed to use all available CPU power, the priority of all participating threads should probably be the lowest
-  // possible. But the other way around, if the tasks be long-running and often yielding (for example, database
-  // operations), than such tasks should be queue to the default pool, and this default pool should *not* be limited to
-  // the number of available CPU cores.
+  // possible. On the other hand, if the tasks are long-running and yield often (for example, database operations),
+  // such tasks should be queued to the default pool, and this default pool should *not* be limited to the number of
+  // available CPU cores.
 
   TParallel.ForEachInt(
 	LowerBound,						// first value
@@ -245,9 +241,9 @@ begin
 	end
   );
 
-  Watch.Stop;
+  Seconds := Watch.ElapsedSecs;
 
-  // Currently, only one thread can execute an action in the GUI thread.
+  // displaying the result must be delegated to the GUI thread:
   TGuiThread.Perform(
 	procedure ()
 	begin
@@ -256,9 +252,9 @@ begin
 		LowerBound,
 		UpperBound,
 		Total,
-		Watch.ElapsedSecs
+		Seconds
 	  ]);
-	  self.ShowMsgBox('Displayed through TGuiThread.Perform(), blocking the respective task.');
+	  TMsgBox.Show('Displayed through TGuiThread.Perform(), blocking the respective task.');
 	  btCountPrimeNumbers.Enabled := true;
 	end,
 	CancelObj
@@ -281,7 +277,7 @@ end;
  //===================================================================================================================
 procedure TfMainForm.btOpenMsgBoxClick(Sender: TObject);
 begin
-  self.ShowMsgBox('Displayed by a regular click event.');
+  TMsgBox.Show('Displayed by a regular click event.');
 end;
 
 end.
