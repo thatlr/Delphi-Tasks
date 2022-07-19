@@ -4,9 +4,8 @@ unit MsgBox;
   Reduced example of a better message box wrapper (compared with TApplication.MessageBox):
   - Buttons are labeled according to the current UI language of the GUI thread.
   - The display position is centered to the current active window, not to the monitor.
-  - The owning top-level window may also be a non-delphi dialog
 
-  In this demo, tthis is an example of an external Windows component that uses its own modal message loop.
+  In this demo, this is an example of an external Windows component that uses its own modal message loop.
 }
 
 {$include CompilerOptions.inc}
