@@ -71,6 +71,7 @@ type
 	  FQueueLock: TSlimRWLock;			// serializes access to FQueue
 	class function MsgHook(Code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT; stdcall; static;
   private
+	class procedure InstallHook; static;
 	class procedure UninstallHook; static;
   public
 	// This method causes the GUI thread to execute <Action>. To do this, Perform waits until the GUI thread wants to
@@ -282,7 +283,23 @@ end;
 
 
  //===================================================================================================================
- // Clean-up of the Windows hook.
+ // Registering the Windows hook. Must be done by the GUI thread.
+ //===================================================================================================================
+class procedure TGuiThread.InstallHook;
+begin
+  // Hooks are automatically unregistered when the thread that *called* SetWindowsHookEx exits. This ownership is not
+  // mentioned anywhere in the Windows documentation. As the hook procedure runs on the thread specified by the last
+  // argument (and *not* on the thread that installed the hook), there is no reason for Windows to behave in this
+  // way.
+  // https://stackoverflow.com/questions/8564987/list-of-installed-windows-hooks
+  Assert(Windows.GetCurrentThreadId = System.MainThreadID);
+
+  FHook := Windows.SetWindowsHookEx(WH_GETMESSAGE, self.MsgHook, 0, System.MainThreadID);
+end;
+
+
+ //===================================================================================================================
+ // Deregistering the Windows hook.
  //===================================================================================================================
 class procedure TGuiThread.UninstallHook;
 begin
@@ -345,6 +362,7 @@ end;
 
 
 initialization
+  TGuiThread.InstallHook;
   Tasks.TThreadPool.GuiWaitFor := TGuiThread.Wait;
 finalization
   Tasks.TThreadPool.GuiWaitFor := nil;
