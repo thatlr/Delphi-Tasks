@@ -16,7 +16,7 @@ As for keeping the implementation as small and fast as possible, this is relying
 * TGuiThread: Allows any thread to inject calls into the GUI thread.
 
 
-## Implemention concept:
+## Implementation concept:
 
 The heart of each thread pool is a thread-safe queue for task objects. The application adds tasks to the queue. Threads are created automatically to drain the queue. Idle threads terminate after a configurable timeout. There are parameters to control the three main aspects of this model: Maximum number of threads, Maximum idle time per thread, Maximum number of tasks waiting to be served.
 
@@ -27,6 +27,18 @@ There is *no* heuristic to "tune" the thread pool(s): It is up to the applicatio
 Also note that Windows only schedules threads within a single, static group of CPU cores, assigned to the process at process startup. (https://docs.microsoft.com/en-us/windows/win32/procthread/processor-groups)
 
 ## Notes:
+
+### Interaction of tasks with the GUI:
+
+Please read: Code vs. UI modality: https://devblogs.microsoft.com/oldnewthing/tag/modality (especially part 4)
+
+When TGuiThread.Perform() is called to execute an action on the GUI thread, that action could display modal dialogs. A (code) modal dialog naturally executes a message loop that is supposed to terminate when the dialog is closed. Such a message loop allows all kinds of window messages to be dispatched, including messages for the modal dialog's parent window or for other non-modal dialogs that the appliation may display.
+
+To avoid reentrancy problems, a modal dialog must disable *all* other dialogs. Otherwise the application might run code for already destroyed GUI objects (see the explanation in the Old New Thing posts).
+
+However, this must *always* be taken into account when displaying a modal dialog, not just in the context of tasks.
+
+### Unit finalization
 
 As always with methods that are used as callbacks (in this case: as task methods), you have to pay attention to the details of unit finalization in Delphi.
 For example, if you have a task that is performing a method from Unit B, and then code in the finalization section of Unit A is stopping that task, it is very possible
