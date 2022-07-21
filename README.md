@@ -18,7 +18,10 @@ As for keeping the implementation as small and fast as possible, this is relying
 
 ## Implementation concept:
 
-The heart of each thread pool is a thread-safe queue for task objects. The application adds tasks to the queue. Threads are created automatically to drain the queue. Idle threads terminate after a configurable timeout. There are parameters to control the three main aspects of this model: Maximum number of threads, Maximum idle time per thread, Maximum number of tasks waiting to be served.
+The heart of each thread pool is a thread-safe queue for task objects. The application adds tasks to the queue. Threads are created automatically to drain the queue. Idle threads terminate after a configurable timeout. There are parameters to control the three main aspects of this model:
+- Maximum number of threads allowd to be started by the specific thread pool
+- Maximum idle time per thread
+- Maximum number of tasks waiting to be served
 
 To enable non-GUI threads to delegate calls to the GUI thread, a Windows messaage hook is used. This has the advantage that the processing is not blocked by non-Delphi modal message loops, neither by the standard Windows message box nor by moving or resizing a window.
 
