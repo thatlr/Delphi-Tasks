@@ -30,7 +30,7 @@ Also note that Windows only schedules threads within a single, static group of C
 
 ### Interaction of tasks with the GUI:
 
-Please read: Code vs. UI modality: https://devblogs.microsoft.com/oldnewthing/tag/modality (especially part 4)
+Please read: Code vs. UI modality: https://devblogs.microsoft.com/oldnewthing/tag/modality (especially part 2 & 4)
 
 When TGuiThread.Perform() is called to execute an action on the GUI thread, that action could display modal dialogs. A (code) modal dialog naturally executes a message loop that is supposed to terminate when the dialog is closed. Such a message loop allows all kinds of window messages to be dispatched, including messages for the modal dialog's parent window or for other non-modal dialogs that the appliation may display.
 
