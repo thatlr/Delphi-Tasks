@@ -171,7 +171,7 @@ type
   // Important:
   // The method must not call System.EndThread(), Windows.ExitThread() nor Windows.TerminateThread(), as this will cause
   // memory leaks, resource leaks and unpredictable behavior.
-  // Windows.SuspendThread can lead to dead-locks (for example, when the thread is stoppped when inside the Memory
+  // Windows.SuspendThread can lead to dead-locks (for example, when the thread is suspended inside the Memory
   // Manager, this will deadlock the entire process) and is therefore also prohibited.
   //===================================================================================================================
   ITaskProcRef = reference to procedure (const CancelObj: ICancel);
@@ -622,7 +622,8 @@ begin
 	try
 	  FAction(self.CancelObj);
 	finally
-	  // an anonymous function may have captured important resources => release reference as soon as possible:
+	  // Release resources (captured through managed types like interfaces, variants, managed records) as soon as possible.
+	  // May throw exception.
 	  FAction := nil;
 	end;
 	FState := TTaskState.Completed;
@@ -631,7 +632,6 @@ begin
 	on EAbort do FState := TTaskState.Completed; // treat EAbort as a voluntary termination
 	else begin
 	  FState := TTaskState.Failed;
-	  // AcquireExceptionObject prevents the release of the exception object when the exception block is exited:
 	  FUnhandledException := System.AcquireExceptionObject;
 	end;
   end;
@@ -643,14 +643,21 @@ end;
 
 
  //===================================================================================================================
- // Implements ITask2.Abort: Set task to "Discarded".
+ // Implements ITask2.Discard: Set state to "Discarded".
  //===================================================================================================================
 procedure TTaskWrapper.Discard;
 begin
   Assert(FState = TTaskState.Pending);
 
-  FAction := nil;
-  FState := TTaskState.Discarded;
+  // Release resources (captured through managed types like interfaces, variants, managed records) as soon as possible.
+  // May throw exception.
+  try
+	FAction := nil;
+	FState := TTaskState.Discarded;
+  except
+	FState := TTaskState.Failed;
+	FUnhandledException := System.AcquireExceptionObject;
+  end;
 
   System.MemoryBarrier;
   // only *after* setting and publishing FState:
@@ -679,7 +686,7 @@ end;
 
 
  //===================================================================================================================
- // Implements ITask.IsComplete: see description there.
+ // Implements ITask.State: see description there.
  //===================================================================================================================
 function TTaskWrapper.State: TTaskState;
 begin
