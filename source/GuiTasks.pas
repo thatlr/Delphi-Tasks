@@ -177,6 +177,7 @@ var
   ActionCtx: TActionCtx;
 begin
   Assert(not System.IsConsole);
+  Assert(FHook <> 0);
   Assert(Assigned(Action));
 
   if Windows.GetCurrentThreadId = System.MainThreadID then begin
@@ -194,13 +195,8 @@ begin
   try
 
 	// append to work queue:
-
 	FQueueLock.AcquireExclusive;
 	try
-	  if FHook = 0 then begin
-		FHook := Windows.SetWindowsHookEx(WH_GETMESSAGE, self.MsgHook, 0, System.MainThreadID);
-	  end;
-
 	  FQueue.Append(@ActionCtx);
 	finally
 	  FQueueLock.ReleaseExclusive;
@@ -330,34 +326,20 @@ class procedure TGuiThread.Wait(Handle: THandle; TimeoutMillisecs: uint32);
 var
   t: TTimeoutTime;
   Msg: TMsg;
-  Wnd: HWND;
-  WindowList: Forms.TTaskWindowList;
-  FocusState: Forms.TFocusState;
 begin
-  // disable all top-level windows of the GUI thread while waiting
-  Wnd := Windows.GetActiveWindow;
-  WindowList := Forms.DisableTaskWindows(0);
-  FocusState := Forms.SaveFocusState;
-  try
+  t := TTimeoutTime.FromMillisecs(TimeoutMillisecs);
 
-	t := TTimeoutTime.FromMillisecs(TimeoutMillisecs);
+  // dispatches WM_PAINT, WM_TIMER and posted messages (including our WM_NULL); may throw exceptions during
+  // this processing:
+  repeat
 
-	// processes the next WM_PAINT, WM_TIMER or posted message; may throw exceptions during this processing:
-	repeat
+	while Windows.PeekMessage(Msg, 0, WM_PAINT, WM_PAINT, PM_REMOVE)
+	  or Windows.PeekMessage(Msg, 0, WM_TIMER, WM_TIMER, PM_REMOVE)
+	  or Windows.PeekMessage(Msg, HWND(-1), 0, 0, PM_REMOVE)
+	do
+	  Windows.DispatchMessage(Msg);
 
-	  while Windows.PeekMessage(Msg, 0, WM_PAINT, WM_PAINT, PM_REMOVE)
-		or Windows.PeekMessage(Msg, 0, WM_TIMER, WM_TIMER, PM_REMOVE)
-		or Windows.PeekMessage(Msg, HWND(-1), 0, 0, PM_REMOVE)
-	  do
-		Windows.DispatchMessage(Msg);
-
-	until _Wait(Handle, t);
-
-  finally
-	Forms.EnableTaskWindows(WindowList);
-	Windows.SetActiveWindow(Wnd);
-	Forms.RestoreFocusState(FocusState);
-  end;
+  until _Wait(Handle, t);
 end;
 
 

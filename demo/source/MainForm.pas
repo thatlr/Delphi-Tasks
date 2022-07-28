@@ -247,7 +247,7 @@ begin
   TGuiThread.Perform(
 	procedure ()
 	begin
-	  lblPrimeResult.Caption := Format('CPU cores used: %d' + CrLf + 'Number of prime number between %d and %d: %d' + CrLf + 'Duration: %.3f seconds', [
+	  lblPrimeResult.Caption := Format('CPU cores used: %d' + CrLf + 'Number of prime numbers between %d and %d: %d' + CrLf + 'Duration: %.3f seconds', [
 		System.CPUCount,
 		LowerBound,
 		UpperBound,
