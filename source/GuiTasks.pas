@@ -107,7 +107,7 @@ type
 implementation
 {############################################################################}
 
-uses Messages, SysUtils, Classes, Forms, TimeoutUtil;
+uses Messages, SysUtils, Classes, TimeoutUtil;
 
 
 { TGuiThread.TQueue }
