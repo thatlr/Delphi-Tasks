@@ -222,7 +222,7 @@ type
 	  FTaskQueue: TTaskQueue;						// linear list of waiting tasks
 	  FMaxWaitTasks: uint32;						// maximum length of <FTaskQueue>
 	  FThreadIdleMillisecs: uint32;					// time after which an idle thread terminates itself
-	  FStackSize: uint32;							// parameter for CreateThread(): thread stack size, in bytes
+	  FStackSizeKB: uint32;							// parameter for CreateThread(): thread stack size, in kilobyte
 	  FLock: TSlimRWLock;							// serializes Get/Put together with FItemAvail and FSpaceAvail
 	  FItemAvail: WinSlimLock.TConditionVariable;	// condition for Get
 	  FSpaceAvail: WinSlimLock.TConditionVariable;	// condition for Put
@@ -297,6 +297,13 @@ type
 	// an ICancel that is observed by all tasks in the pool).
 	procedure Wait;
 
+	// Properties as given to the constructor:
+	property MaxThreads: uint32 read FThreads.TotalMax;
+	property MaxTaskQueueLength: uint32 read FMaxWaitTasks;
+	property ThreadIdleMillisecs: uint32 read FThreadIdleMillisecs;
+	property StackSizeKB: uint32 read FStackSizeKB;
+
+	// current state of the pool:
 	property ThreadsTotal: uint32 read FThreads.TotalCount;
 	property ThreadsIdle: uint32 read FThreads.IdleCount;
   end;
@@ -811,7 +818,7 @@ end;
  //===================================================================================================================
 constructor TThreadPool.Create(MaxThreads, MaxTaskQueueLength, ThreadIdleMillisecs, StackSizeKB: uint32);
 begin
-  // CPUCount contains the number of CPUs in the processor group of the process, not the total number. But a process is
+  // CPUCount contains the number of CPUs in the processor group of this process, not the total number. But a process is
   // only scheduled within its processor group, so that all other CPUs are irrelevant anyway.
   if MaxThreads = 0 then MaxThreads := System.CPUCount;
   FThreads.TotalMax := MaxThreads;
@@ -820,7 +827,7 @@ begin
   FMaxWaitTasks := MaxTaskQueueLength;
 
   FThreadIdleMillisecs := ThreadIdleMillisecs;
-  FStackSize := StackSizeKB * 1024;
+  FStackSizeKB := StackSizeKB;
 
   inherited Create;
 end;
@@ -846,8 +853,6 @@ begin
   TSlimRWLock.WakeAllConditionVariable(FItemAvail);
 
   FLock.AcquireExclusive;
-  // cancel all tasks that have not yet started (for faster completion if many tasks have accumulated):
-  while FTaskQueue.Count <> 0 do FTaskQueue.Extract.Discard;
   // wait until no more threads are active (similar to .Wait):
   while FThreads.TotalCount <> 0 do FLock.SleepConditionVariable(FIdle, INFINITE, 0);
   FLock.ReleaseExclusive;
@@ -989,9 +994,6 @@ end;
 
  //===================================================================================================================
  // Creates an OS thread that immediately starts executing TThreadPool.OsThreadFunc.
- // MaxStackSize:
- //   If not zero, this defines the space reserved for the stack in the address area of the process (in bytes).
- //   If zero, the maximum stack size from the Exeutable header is used (Project Options -> Delphi Compiler -> Linking -> Maximum Stack Size).
  //===================================================================================================================
 procedure TThreadPool.StartNewThread;
 const
@@ -1001,7 +1003,10 @@ var
   Handle: THandle;
   ThreadID: DWORD;
 begin
-  Handle := THandle(System.BeginThread(nil, FStackSize, pointer(@TThreadPool.OsThreadFunc), self, STACK_SIZE_PARAM_IS_A_RESERVATION, ThreadID));
+  // StackSize parameter:
+  //   If not zero, this defines the space reserved for the stack in the address space of the process.
+  //   If zero, the maximum stack size from the Exeutable header is used (Project Options -> Delphi Compiler -> Linking -> Maximum Stack Size).
+  Handle := THandle(System.BeginThread(nil, FStackSizeKB * 1024, pointer(@TThreadPool.OsThreadFunc), self, STACK_SIZE_PARAM_IS_A_RESERVATION, ThreadID));
   if Handle = 0 then SysUtils.RaiseLastOSError;
   Windows.CloseHandle(Handle);
 end;
@@ -1022,9 +1027,11 @@ begin
 	// timeout while waiting for new tasks:
 	if not Assigned(Task) then break;
 
-	// - Task.Execute must not call Windows.ExitThread() or System.EndThread().
-	// - Task.Execute must catch all exceptions.
-	Task.Execute;
+	// both must catch all exceptions:
+	if self.FDestroying then
+	  Task.Discard
+	else
+	  Task.Execute;
 
 	// release reference now:
 	Task := nil;

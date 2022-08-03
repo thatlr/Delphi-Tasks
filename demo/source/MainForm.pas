@@ -122,6 +122,8 @@ end;
  //===================================================================================================================
  //===================================================================================================================
 procedure TfMainForm.FormClose(Sender: TObject; var Action: TCloseAction);
+var
+  i: integer;
 begin
   self.ModalResult := mrCancel;
 
@@ -130,6 +132,11 @@ begin
 
   // wait for this task with reduced message-processing:
   FTask.Wait;
+
+  // just test: queue a large number of tasks, then destroy the thread pool:
+  for i := 1 to 5000 do begin
+	FPool.Queue(procedure (const Cancel: ICancel) begin end, nil);
+  end;
 
   // The thread pool destructor waits for all its tasks to finish. To prevent a deadlock here, it is mandatory that all
   // this tasks use FCancel, and FCancel is set at this point. (This would not apply if the tasks in question do not
