@@ -852,14 +852,16 @@ begin
   // wake up all threads waiting in Get(), so that they see the new FThreadIdleMillisecs value:
   TSlimRWLock.WakeAllConditionVariable(FItemAvail);
 
+  // wait until no more threads are active and the queue is empty:
   FLock.AcquireExclusive;
-  // wait until no more threads are active (similar to .Wait):
-  while FThreads.TotalCount <> 0 do FLock.SleepConditionVariable(FIdle, INFINITE, 0);
+  while (FThreads.TotalCount <> 0) or (FTaskQueue.Count <> 0) do FLock.SleepConditionVariable(FIdle, INFINITE, 0);
   FLock.ReleaseExclusive;
 
+  // no thread must exist at this point:
+  Assert(FThreads.TotalCount = 0);
   // no task must wait at this point:
   Assert(FTaskQueue.Count = 0);
-  // the locks must be released:
+  // the locks must be unowned:
   Assert(FItemAvail.Ptr = nil);
   Assert(FSpaceAvail.Ptr = nil);
 
