@@ -5,16 +5,10 @@ unit GuiTasks;
 
   - TGuiThread: Provides methods that can be used by any thread to inject calls into the GUI thread.
 
-  This unit enables ITask.Wait do perform a "modal" wait when called from the GUI thread. If not included in the
-  project, ITask.Wait just blocks the GUI thread which may lead to a dead-lock is the task uses TGuiThread.Perform.
-
-  This means:
-
-  - During the wait, certain Windows messages are still processed (WM_PAINT, WM_TIMER, posted messages). This allows
-	windows to be repainted and it allows tasks to perform GUI operations via TGuiThread.Perform.
-
-  - During the wait, all top-level windows of the application are disabled, to prevent most reentrancy issues if
-	some task (or a paint handler or a timer handler) displays a modal dialog.
+  This unit enables ITask.Wait to operate differently when called from the GUI thread: If not included in the
+  project, ITask.Wait just blocks the GUI thread which may lead to a dead-lock if the task uses TGuiThread.Perform.
+  With this unit included, certain Windows messages are still processed during the wait (WM_PAINT, WM_TIMER, posted
+  messages). This allows windows to be repainted and it allows tasks to perform GUI operations via TGuiThread.Perform.
 
   See also: https://devblogs.microsoft.com/oldnewthing/tag/modality
 }

@@ -57,6 +57,8 @@ unit Tasks;
 	As x86 has MESI as cache-coherence protocol, this is not about cache consistency, but about delayed write to
 	memory/L1 cache from the core's store buffer.
 
+	https://learn.microsoft.com/en-us/windows/win32/dxtecharts/lockless-programming
+	https://www.msully.net/blog/2015/02/25/the-x86-memory-model
 	https://newbedev.com/which-is-a-better-write-barrier-on-x86-lock-addl-or-xchgl
 	https://newbedev.com/race-condition-on-x86
 	https://bartoszmilewski.com/2008/11/05/who-ordered-memory-fences-on-an-x86/
@@ -65,6 +67,12 @@ unit Tasks;
 	https://prog.world/weak-memory-models-write-buffering-on-x86/
 	https://preshing.com/20120515/memory-reordering-caught-in-the-act/
 	https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf
+
+	Especially the first link ("Lockless Programming Considerations for Xbox 360 and Microsoft Windows") gives a detailed
+	overview about the topic. Core statement:
+	"Even though x86 and x64 CPUs do not reorder writes relative to other writes, or reorder reads relative to other reads,
+	they can reorder reads relative to writes. Specifically, if a program writes to one location followed by reading from a
+	different location, the read data may come from shared memory before the written data makes it there."
 }
 
 
