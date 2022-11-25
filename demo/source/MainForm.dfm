@@ -1,6 +1,6 @@
 object fMainForm: TfMainForm
   Left = 458
-  Top = 457
+  Top = 508
   Caption = 'GUI Task Demo'
   ClientHeight = 161
   ClientWidth = 411

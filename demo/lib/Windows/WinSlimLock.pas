@@ -1,8 +1,8 @@
 unit WinSlimLock;
 
-
 {
   Unit only contains definitions that could also be used by MemTest.pas.
+
   - TSlimRWLock: Structure that wraps Windows' built-in Slim Reader/Writer Lock.
 }
 

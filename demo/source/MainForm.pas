@@ -57,7 +57,8 @@ uses
   StdLib,
   MsgBox,
   StopWatch,
-  TaskUtils;
+  TaskUtils,
+  TimeoutUtil;
 
 {$R *.dfm}
 
@@ -90,6 +91,7 @@ begin
   FCancel := TCancelFlag.Create;
 
   // create a thread pool with two tasks:
+
   FPool := TThreadPool.Create(3, 10000, 1000, 64);
 
   FPool.Queue(
@@ -109,6 +111,7 @@ begin
   );
 
   // create another task in the default thread pool:
+
   FTask := TThreadPool.Run(
 	procedure (const CancelObj: ICancel)
 	begin
@@ -116,6 +119,15 @@ begin
 	end,
 	FCancel
   );
+
+  // must report true, as there is no timeout:
+  Assert(TTasks.WaitAll([], TTimeoutTime.Infinite));
+
+  // must report Timeout, as FTask is not cancelled:
+  Assert(not TTasks.WaitAll([FTask], TTimeoutTime.Elapsed));
+
+  // must report Timeout, as FTask is not cancelled:
+  Assert(TTasks.WaitAny([FTask], TTimeoutTime.Elapsed) = -1);
 end;
 
 
@@ -123,15 +135,30 @@ end;
  //===================================================================================================================
 procedure TfMainForm.FormClose(Sender: TObject; var Action: TCloseAction);
 var
+  b: boolean;
   i: integer;
 begin
-  self.ModalResult := mrCancel;
-
   // terminate all tasks running in the context of this form:
   FCancel.Cancel;
 
-  // wait for this task with reduced message-processing:
+  // wait for this task with limited message-processing:
   FTask.Wait;
+
+  // must return true immediatly, as FTask is already cancelled:
+  b := TTasks.WaitAll([FTask], TTimeoutTime.Infinite);
+  Assert(b);
+
+  // must return true immediatly, as FTask is already cancelled:
+  b := TTasks.WaitAll([FTask], TTimeoutTime.Elapsed);
+  Assert(b);
+
+  // must return 0 immediatly, as FTask is already cancelled:
+  i := TTasks.WaitAny([FTask], TTimeoutTime.Infinite);
+  Assert(i = 0);
+
+  // must return 0 immediatly, as FTask is already cancelled:
+  i := TTasks.WaitAny([FTask], TTimeoutTime.Elapsed);
+  Assert(i = 0);
 
   // just test: queue a large number of tasks, then destroy the thread pool:
   for i := 1 to 5000 do begin
@@ -142,6 +169,8 @@ begin
   // this tasks use FCancel, and FCancel is set at this point. (This would not apply if the tasks in question do not
   // call TGuiThread.Perform().)
   FreeObj(FPool);
+
+  self.ModalResult := mrCancel;
 end;
 
 
@@ -155,10 +184,11 @@ var
   Up: boolean;
 begin
   Up := true;
+  Color := 0;
   repeat
 	Windows.Sleep(15 + 5 * ThreadNum);
 
-	// make i to count up and down between 0 and 255:
+	// make Color to count up and down between 0 and 255:
 	if Up then inc(Color) else dec(Color);
 	if Color = 0 then Up := true
 	else if Color = 255 then Up := false;

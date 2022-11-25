@@ -60,7 +60,6 @@
 				<Form>fMainForm</Form>
 			</DCCReference>
 			<DCCReference Include="TaskUtils.pas"/>
-			<DCCReference Include="MsgBox.pas"/>
 			<BuildConfiguration Include="Basis">
 				<Key>Base</Key>
 			</BuildConfiguration>

@@ -57,8 +57,8 @@ unit Tasks;
 	As x86 has MESI as cache-coherence protocol, this is not about cache consistency, but about delayed write to
 	memory/L1 cache from the core's store buffer.
 
-	https://learn.microsoft.com/en-us/windows/win32/dxtecharts/lockless-programming
-	https://www.msully.net/blog/2015/02/25/the-x86-memory-model
+    https://learn.microsoft.com/en-us/windows/win32/dxtecharts/lockless-programming
+    https://www.msully.net/blog/2015/02/25/the-x86-memory-model
 	https://newbedev.com/which-is-a-better-write-barrier-on-x86-lock-addl-or-xchgl
 	https://newbedev.com/race-condition-on-x86
 	https://bartoszmilewski.com/2008/11/05/who-ordered-memory-fences-on-an-x86/
@@ -68,7 +68,7 @@ unit Tasks;
 	https://preshing.com/20120515/memory-reordering-caught-in-the-act/
 	https://www.cl.cam.ac.uk/~pes20/weakmemory/x86tso-paper.tphols.pdf
 
-	Especially the first link ("Lockless Programming Considerations for Xbox 360 and Microsoft Windows") gives a detailed
+    Especially the first link ("Lockless Programming Considerations for Xbox 360 and Microsoft Windows") gives a detailed
 	overview about the topic. Core statement:
 	"Even though x86 and x64 CPUs do not reorder writes relative to other writes, or reorder reads relative to other reads,
 	they can reorder reads relative to writes. Specifically, if a program writes to one location followed by reading from a
@@ -81,7 +81,7 @@ unit Tasks;
 
 interface
 
-uses WinSlimLock, WindowsSynchronization, SysUtils;
+uses WinSlimLock, WindowsSynchronization, TimeoutUtil, SysUtils;
 
 type
   TWaitHandle = WindowsSynchronization.TWaitHandle;
@@ -168,7 +168,8 @@ type
 	// - There are the following variants in the Windows API: CoWaitForMultipleObjects(), MsgWaitForMultipleObjects()
 	//   and WaitForMultipleObjects(). For special requirements, the caller himself should use CompleteHW.Handle with
 	//   one of these variants, specify the desired flags and react according to the respective return value.
-	function Wait(ThrowOnError: boolean = true; TimeoutMillisecs: uint32 = INFINITE): boolean;
+	function Wait(ThrowOnError: boolean = true; TimeoutMillisecs: uint32 = System.INFINITE): boolean; overload;
+	function Wait(ThrowOnError: boolean; const Timeout: TTimeoutTime): boolean; overload;
   end;
 
 
@@ -252,7 +253,7 @@ type
 	  // To not pull-in most of the VCL code, this is to be provided by another unit:
 	  // Used when the GUI thread calls ITask.Wait. Should wait until <Handle> gets signaled.
 	  // May throw exceptions.
-	  GuiWaitFor: procedure (Handle: THandle; TimeoutMillisecs: uint32);
+	  GuiWaitFor: function (const Handles: array of THandle; const Timeout: TTimeoutTime): integer;
 
   public
 	// Queues the action to the default thread pool and returns the respective ITask reference.
@@ -318,6 +319,34 @@ type
 
 
   //===================================================================================================================
+  //===================================================================================================================
+  TTasks = record
+  public
+	// Blocks until all given tasks have run to completion, or the timeout is reached.
+	// Returns true when all tasks have run to completion (even if Timeout is already expired on entry), or false when
+	// the call timed out.
+	// For error detection, the State property or the UnhandledException property of each task should be checked
+	// afterwards.
+	// Any number of tasks is accepted, including zero. The tasks can belong to any thread pool.
+	//
+	// When called by the GUI thread, certain types of Windows messages are still processed while waiting. The
+	// processing of these messages may throw exceptions.
+	class function WaitAll(const Tasks: array of ITask; const Timeout: TTimeoutTime): boolean; static;
+
+	// Blocks until one of the given tasks have run to completion, or the timeout is reached.
+	// Returns the array index of the completed task (even if Timeout is already expired on entry), or -1 when the call
+	// timed out. If multiple tasks are completed at the same time, the index of the first one in the array is returned.
+	// For error detection, the State property or the UnhandledException property of the reported task should be checked
+	// afterwards.
+	// 1 to 63 tasks are accepted. The tasks can belong to any thread pool.
+	//
+	// When called by the GUI thread, certain types of Windows messages are still processed while waiting. The
+	// processing of these messages may throw exceptions.
+	class function WaitAny(const Tasks: array of ITask; const Timeout: TTimeoutTime): integer; static;
+  end;
+
+
+  //===================================================================================================================
   // Implements ICancel on the basis of a TEvent object that is only created when required.
   //===================================================================================================================
   TCancelFlag = class (TInterfacedObject, ICancel)
@@ -371,7 +400,7 @@ procedure Reset8087CW; inline;
 implementation
 {############################################################################}
 
-uses Windows, TimeoutUtil;
+uses Windows;
 
 type
   //===================================================================================================================
@@ -393,7 +422,8 @@ type
 	function CompleteWH: TWaitHandle;
 	function UnhandledException: Exception;
 	function CancelObj: ICancel;
-	function Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean;
+	function Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean; overload;
+	function Wait(ThrowOnError: boolean; const Timeout: TTimeoutTime): boolean; overload;
 	// << ITask
 	// >> ITask2
 	procedure SetNext(const Item: TThreadPool.ITask2);
@@ -746,11 +776,20 @@ end;
  //===================================================================================================================
 function TTaskWrapper.Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean;
 begin
+  Result := self.Wait(ThrowOnError, TTimeoutTime.FromMillisecs(TimeoutMillisecs));
+end;
+
+
+ //===================================================================================================================
+ // Implements ITask.Wait: see description there.
+ //===================================================================================================================
+function TTaskWrapper.Wait(ThrowOnError: boolean; const Timeout: TTimeoutTime): boolean;
+begin
   if FState = TTaskState.Pending then begin
 	if not Assigned(TThreadPool.GuiWaitFor) or System.IsConsole or (Windows.GetCurrentThreadId <> System.MainThreadID) then
-	  self.CompleteWH.Wait(TimeoutMillisecs)
+	  self.CompleteWH.Wait(Timeout)
 	else
-	  TThreadPool.GuiWaitFor(self.CompleteWH.Handle, TimeoutMillisecs);
+	  TThreadPool.GuiWaitFor([self.CompleteWH.Handle], Timeout);
   end;
 
   if ThrowOnError and Assigned(FUnhandledException) then
@@ -862,7 +901,7 @@ begin
 
   // wait until no more threads are active and the queue is empty:
   FLock.AcquireExclusive;
-  while (FThreads.TotalCount <> 0) or (FTaskQueue.Count <> 0) do FLock.SleepConditionVariable(FIdle, INFINITE, 0);
+  while (FThreads.TotalCount <> 0) or (FTaskQueue.Count <> 0) do FLock.SleepConditionVariable(FIdle, System.INFINITE, 0);
   FLock.ReleaseExclusive;
 
   // no thread must exist at this point:
@@ -884,7 +923,7 @@ procedure TThreadPool.Wait;
 begin
   // could be AcquireShared/ReleaseShared (but it would be the only place, so nothing is gained):
   FLock.AcquireExclusive;
-  while (FThreads.IdleCount < FThreads.TotalCount) or (FTaskQueue.Count <> 0) do FLock.SleepConditionVariable(FIdle, INFINITE, 0);
+  while (FThreads.IdleCount < FThreads.TotalCount) or (FTaskQueue.Count <> 0) do FLock.SleepConditionVariable(FIdle, System.INFINITE, 0);
   FLock.ReleaseExclusive;
 end;
 
@@ -910,7 +949,7 @@ begin
 	// wait until space becomes available for a task:
 	while FTaskQueue.Count >= FMaxWaitTasks do begin
 	  // during SleepConditionVariable() other threads can take the lock
-	  FLock.SleepConditionVariable(FSpaceAvail, INFINITE, 0);
+	  FLock.SleepConditionVariable(FSpaceAvail, System.INFINITE, 0);
 	end;
 
 	FTaskQueue.Append(Result);
@@ -1050,6 +1089,50 @@ begin
 
   // would be returned by Windows.GetExitCodeThread, but irrelevant here:
   Result := 0;
+end;
+
+
+{ TTasks }
+
+ //===================================================================================================================
+ // See description in interface section.
+ //===================================================================================================================
+class function TTasks.WaitAll(const Tasks: array of ITask; const Timeout: TTimeoutTime): boolean;
+var
+  Task: ITask;
+begin
+  for Task in Tasks do begin
+	if not Task.Wait(false, Timeout) then exit(false);
+  end;
+  exit(true);
+end;
+
+
+ //===================================================================================================================
+ // See description in interface section.
+ //===================================================================================================================
+class function TTasks.WaitAny(const Tasks: array of ITask; const Timeout: TTimeoutTime): integer;
+var
+  Handles: Windows.TWOHandleArray;
+  Count: integer;
+begin
+  Count := System.Length(Tasks);
+
+  // for consistency, check allowed number of tasks before any work (MsgWaitForMultipleObjectsEx() allows 1..63 handles):
+  if (Count = 0) or (Count >= Windows.MAXIMUM_WAIT_OBJECTS) then
+	raise EArgumentException.Create('Invalid number of tasks');
+
+  for Result := 0 to Count - 1 do begin
+	// task already completed => return its index:
+	if Tasks[Result].State <> TTaskState.Pending then exit;
+	Handles[Result] := Tasks[Result].CompleteWH.Handle;
+  end;
+
+  // same condition as in TTaskWrapper.Wait:
+  if not Assigned(TThreadPool.GuiWaitFor) or System.IsConsole or (Windows.GetCurrentThreadId <> System.MainThreadID) then
+	Result := TWaitHandle.WaitMultiple(Count, @Handles, Timeout.AsMilliSecs, false)
+  else
+	Result := TThreadPool.GuiWaitFor(Slice(Handles, Count), Timeout);
 end;
 
 

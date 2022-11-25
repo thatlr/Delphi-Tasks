@@ -14,6 +14,7 @@ interface
 type
   //===================================================================================================================
   // Represents the expiration time of a timeout. This is *not* a timespan, but a absolute point in time!
+  // Time spent in sleep or hibernation counts towards the timeout.
   //
   // This is a very thin wrapper around the API function GetTickCount64, which provides the number of milliseconds
   // since the last Windows system start, regardless of time changes, time zone changes and daylight saving time
@@ -21,24 +22,25 @@ type
   //===================================================================================================================
   TTimeoutTime = record
   strict private
-	FTimeoutTime: uint64;		// Time at which the timeout expires (in terms of GetTickCount64)
-	class function ClampTo32(Value: uint64): uint32; static; inline;
+	const
+	  FInfinite = uint64(High(int64));		// not cause overflow in the signed subtraction in RemainingMilliSecs (roughly 292m years)
+	var
+	  FTimeoutTime: uint64;					// time when the timeout expires (in terms of GetTickCount64)
+
 	function RemainingMilliSecs: uint64;
-	function GetIsDefined: boolean; inline;
+	class function ClampTo32(Value: uint64): uint32; static; {$ifdef CPU64BITS}inline;{$endif}
   public
 	constructor FromMilliSecs(Value: uint32);
 	constructor FromSecs(Value: uint32);
-	property IsDefined: boolean read GetIsDefined;
+	class function Elapsed: TTimeoutTime; inline; static;
+	class function Infinite: TTimeoutTime; inline; static;
+	class function Undefined: TTimeoutTime; static; deprecated 'use "Infinite"';
+
 	function AsSeconds: uint32;
 	function AsMilliSecs: uint32;
 	function IsElapsed: boolean;
-
-  strict private
-	class var FUndefined: TTimeoutTime;
-  public
-	// Is intended to express "no timeout", but requires the code to check the IsDefined property
-	// to detect this situation.
-	class property Undefined: TTimeoutTime read FUndefined;
+	function IsInfinite: boolean; {$ifdef CPU64BITS}inline;{$endif}
+	function IsDefined: boolean; deprecated 'use "not .IsInfinite"';
   end;
 
 
@@ -64,18 +66,76 @@ type
 { TTimeoutTime }
 
  //===================================================================================================================
+ // Returns a timeout is already expired.
+ //===================================================================================================================
+class function TTimeoutTime.Elapsed: TTimeoutTime;
+begin
+  Result.FTimeoutTime := 0;
+end;
+
+
+ //===================================================================================================================
+ // Returns a timeout that never expires.
+ //===================================================================================================================
+class function TTimeoutTime.Infinite: TTimeoutTime;
+begin
+  Result.FTimeoutTime := FInfinite;
+end;
+
+
+ //===================================================================================================================
+ // Obsolete.
+ //===================================================================================================================
+class function TTimeoutTime.Undefined: TTimeoutTime;
+begin
+  Result := TTimeoutTime.Infinite;
+end;
+
+
+ //===================================================================================================================
+ // Returns true if the timeout is "Infinite".
+ //===================================================================================================================
+function TTimeoutTime.IsInfinite: boolean;
+begin
+  Result := FTimeoutTime = FInfinite;
+end;
+
+
+ //===================================================================================================================
+ // Obsolete.
+ //===================================================================================================================
+function TTimeoutTime.IsDefined: boolean;
+begin
+  Result := not self.IsInfinite;
+end;
+
+
+ //===================================================================================================================
+ // Returns true if the timeout has expired.
+ //===================================================================================================================
+function TTimeoutTime.IsElapsed: boolean;
+begin
+  Result := GetTickCount64 >= FTimeoutTime;
+end;
+
+
+ //===================================================================================================================
  // Initializes the timeout with the specified number of milliseconds.
- // The constant INFINITE is not supported.
+ // The constant System.INFINITE (identical to Windows.INFINITE) is supported.
  // Due to the argument type, the maximum timeout is limited to 49.7 days.
  //===================================================================================================================
 constructor TTimeoutTime.FromMilliSecs(Value: uint32);
 begin
-  FTimeoutTime :=  GetTickCount64 + Value;
+  if Value = System.INFINITE then
+	FTimeoutTime := FInfinite
+  else
+	FTimeoutTime := GetTickCount64 + Value;
 end;
 
 
  //===================================================================================================================
  // Initializes the timeout with the specified number of of seconds.
+ // The constant System.INFINITE (identical to Windows.INFINITE) is not supported.
  // Due to the argument type, the maximum timeout is limited to 49700 days.
  //===================================================================================================================
 constructor TTimeoutTime.FromSecs(Value: uint32);
@@ -97,10 +157,12 @@ end;
 
 
  //===================================================================================================================
- // Returns <Value> as an uint32, or High(uint32) if <Value> is outside the uint32 range.
+ // Returns <Value> as uint32, or High(uint32) if <Value> exceeds the uint32 range.
  //===================================================================================================================
 class function TTimeoutTime.ClampTo32(Value: uint64): uint32;
 begin
+  {$if High(Result) <> System.INFINITE} {$message error 'Wrong result type'} {$ifend}
+
   if TInt64Rec(Value).Hi <> 0 then
 	Result := High(Result)
   else
@@ -110,7 +172,8 @@ end;
 
  //===================================================================================================================
  // Returns the number of milliseconds until the timeout.
- // The result type limits the maximum time that can be delivered to 49.7 days.
+ // The result type limits the maximum time that can be delivered to 49.7 days. For higher values, or if the value
+ // in Infinite, System.INFINITE is returned.
  //===================================================================================================================
 function TTimeoutTime.AsMilliSecs: uint32;
 begin
@@ -120,7 +183,8 @@ end;
 
  //===================================================================================================================
  // Returns the number of seconds until the timeout.
- // The result type limits the maximum time that can be delivered to 49700 days.
+ // The result type limits the maximum time that can be delivered to 49700 days. For higher values, or if the value
+ // is Infinite, the highest possible value is returned.
  //===================================================================================================================
 function TTimeoutTime.AsSeconds: uint32;
 begin
@@ -129,21 +193,49 @@ end;
 
 
  //===================================================================================================================
- // Returns true if the timeout has expired.
+ // Exists only in Debug builds.
  //===================================================================================================================
-function TTimeoutTime.IsElapsed: boolean;
+function UnitTest: boolean;
+var
+  t: TTimeoutTime;
 begin
-  Result := GetTickCount64 >= FTimeoutTime;
+  t := TTimeoutTime.Infinite;
+  Assert(t.IsInfinite);
+  Assert(not t.IsElapsed);
+  Assert(t.AsMilliSecs = System.INFINITE);
+  Assert(t.AsMilliSecs = High(t.AsMilliSecs));
+  Assert(t.AsSeconds = High(t.AsSeconds));
+
+  t := TTimeoutTime.FromMilliSecs(System.INFINITE);
+  Assert(t.IsInfinite);
+  Assert(not t.IsElapsed);
+  Assert(t.AsMilliSecs = System.INFINITE);
+
+  t := TTimeoutTime.Elapsed;
+  Assert(not t.IsInfinite);
+  Assert(t.IsElapsed);
+  Assert(t.AsMilliSecs = 0);
+  Assert(t.AsSeconds = 0);
+
+  t := TTimeoutTime.FromMilliSecs(0);
+  Assert(not t.IsInfinite);
+  Assert(t.IsElapsed);
+  Assert(t.AsMilliSecs = 0);
+
+  t := TTimeoutTime.FromMilliSecs($FFFFFFFE);
+  Assert(not t.IsInfinite);
+  Assert(not t.IsElapsed);
+  Assert(t.AsMilliSecs <= $FFFFFFFE);
+
+  t := TTimeoutTime.FromSecs(123);
+  // can only fail on an extremly slow system, or if halted in the debugger in between:
+  Assert(t.AsSeconds in [122, 123]);
+
+  Result := true;
 end;
 
 
- //===================================================================================================================
- // Returns true if the timeout was initialized. If not, it could(!) be interpreted as "infinite".
- //===================================================================================================================
-function TTimeoutTime.GetIsDefined: boolean;
-begin
-  Result := FTimeoutTime <> 0;
-end;
-
+initialization
+  Assert(UnitTest);
 end.
 

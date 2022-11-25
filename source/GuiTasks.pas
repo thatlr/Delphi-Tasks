@@ -18,7 +18,7 @@ unit GuiTasks;
 
 interface
 
-uses Windows, WinSlimLock, WindowsSynchronization, Tasks;
+uses Windows, WinSlimLock, WindowsSynchronization, TimeoutUtil, Tasks;
 
 type
   //===================================================================================================================
@@ -60,10 +60,13 @@ type
 	  end;
 
 	class var
-	  FHook: HHOOK;
+	  FMsgHook: HHOOK;
+	  FCbtHook: HHOOK;
+	  FWaiting: uint32;
 	  FQueue: TQueue;					// queue for transferring calls from Perform() to MsgHook()
 	  FQueueLock: TSlimRWLock;			// serializes access to FQueue
 	class function MsgHook(Code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT; stdcall; static;
+	class function CbtHook(Code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT; stdcall; static;
   private
 	class procedure InstallHook; static;
 	class procedure UninstallHook; static;
@@ -89,11 +92,11 @@ type
 	class function Perform(Action: TGuiProc; CancelObj: ICancel): boolean; overload; static;
 	class function Perform(const Action: IGuiProcRef; CancelObj: ICancel): boolean; overload; static;
 
-	// This method is used by ITask.Wait() for the GUI thread. It will wait for <Handle> to become signaled, but
-	// is simultaneously dispatching a limited range of Windows messages (timer, paint, posted messages).
-	// (posted messages are messages create by PostThreadMessage() or PostMessage(NULL, ...)).
-	// Could also be used by other application code.
-	class procedure Wait(Handle: THandle; TimeoutMillisecs: uint32); static;
+	// This method waits for one of <Handles> to be signaled, but is simultaneously dispatching a limited range
+	// of Windows messages (timer, paint, posted messages).
+	// It returns the index of the first handle in <Handles> that is signaled, or -1 for timeout.
+	// This method is used by ITask.Wait() for the GUI thread, but could also be used by other application code.
+	class function Wait(const Handles: array of THandle; const Timeout: TTimeoutTime): integer; static;
   end;
 
 
@@ -101,7 +104,7 @@ type
 implementation
 {############################################################################}
 
-uses Messages, SysUtils, Classes, TimeoutUtil;
+uses Messages, SysUtils, StdLib, Classes;
 
 
 { TGuiThread.TQueue }
@@ -171,7 +174,7 @@ var
   ActionCtx: TActionCtx;
 begin
   Assert(not System.IsConsole);
-  Assert(FHook <> 0);
+  Assert(FMsgHook <> 0);
   Assert(Assigned(Action));
 
   if Windows.GetCurrentThreadId = System.MainThreadID then begin
@@ -202,7 +205,7 @@ begin
 	// Waiting only for ActionCtx.FDone would cause a deadlock if the GUI thread is calling TThreadPool.Destroy or
 	// TThreadPool.Wait, since both do not execute the message hook!
 
-	if TWaitHandle.WaitAny([ActionCtx.FDone.Handle, CancelObj.CancelWH.Handle], INFINITE) = 0 then
+	if TWaitHandle.WaitAny([ActionCtx.FDone.Handle, CancelObj.CancelWH.Handle], System.INFINITE) = 0 then
 	  exit(true);
 
 	// if the action is still in the queue then remove it and return false:
@@ -214,7 +217,7 @@ begin
 	end;
 
 	// GUI thread is already executing the action => just wait:
-	ActionCtx.FDone.Wait(INFINITE);
+	ActionCtx.FDone.Wait(System.INFINITE);
 	Result := true;
 
   finally
@@ -233,8 +236,7 @@ var
 begin
   Assert(Windows.GetCurrentThreadId = System.MainThreadID);
 
-  // <Code> values other than HC_ACTION are only possible with WH_JOURNALPLAYBACK and WH_JOURNALRECORD hooks, not with
-  // WH_GETMESSAGE.
+  // <Code> values other than HC_ACTION are only possible with WH_JOURNALPLAYBACK and WH_JOURNALRECORD hooks.
 
   // only react to WM_NULL messages sent via PostThreadMessage() (not to every message):
   if (Code = HC_ACTION) and (wParam = PM_REMOVE) and (PMsg(lParam).hwnd = 0) and (PMsg(lParam).message = WM_NULL) then begin
@@ -273,6 +275,22 @@ end;
 
 
  //===================================================================================================================
+ // Is executed in the thread for which this message hook was registered (System.MainThreadID) and suppresses the
+ // WM_SYSCOMMAND messages while waiting, because the app code certainly doesn't expect the program to be closed while
+ // waiting, at least when WM_SYSCOMMAND comes from the Windows taskbar (or any other process).
+ //===================================================================================================================
+class function TGuiThread.CbtHook(Code: int32; wParam: WPARAM; lParam: LPARAM): LRESULT;
+begin
+  Assert(Windows.GetCurrentThreadId = System.MainThreadID);
+
+  if (FWaiting <> 0) and (Code = HCBT_SYSCOMMAND) and (wParam = SC_CLOSE) then
+	Result := 1
+  else
+	Result := Windows.CallNextHookEx(0, Code, wParam, lParam);
+end;
+
+
+ //===================================================================================================================
  // Registering the Windows hook. Must be done by the GUI thread.
  //===================================================================================================================
 class procedure TGuiThread.InstallHook;
@@ -284,7 +302,8 @@ begin
   // https://stackoverflow.com/questions/8564987/list-of-installed-windows-hooks
   Assert(Windows.GetCurrentThreadId = System.MainThreadID);
 
-  FHook := Windows.SetWindowsHookEx(WH_GETMESSAGE, self.MsgHook, 0, System.MainThreadID);
+  FMsgHook := Windows.SetWindowsHookEx(WH_GETMESSAGE, self.MsgHook, 0, System.MainThreadID);
+  FCbtHook := Windows.SetWindowsHookEx(WH_CBT, self.CbtHook, 0, System.MainThreadID);
 end;
 
 
@@ -293,47 +312,86 @@ end;
  //===================================================================================================================
 class procedure TGuiThread.UninstallHook;
 begin
-  if FHook <> 0 then begin
-	Windows.UnhookWindowsHookEx(FHook);
-	FHook := 0;
+  if FCbtHook <> 0 then begin
+	Windows.UnhookWindowsHookEx(FCbtHook);
+	FCbtHook := 0;
+  end;
+  if FMsgHook <> 0 then begin
+	Windows.UnhookWindowsHookEx(FMsgHook);
+	FMsgHook := 0;
   end;
 end;
 
 
  //===================================================================================================================
  // See description in interface section.
+ // https://devblogs.microsoft.com/oldnewthing/20050217-00/?p=36423 "MsgWaitForMultipleObjects and the queue state"
+ // https://devblogs.microsoft.com/oldnewthing/20060127-17/?p=32493 "Waiting for all handles with MsgWaitForMultipleObjects is a bug waiting to happen"
+ // https://devblogs.microsoft.com/oldnewthing/20050222-00/?p=36393 "Modality, part 3: The WM_QUIT message"
+ //
+ // Observations:
+ // - Inside PeekMessage, the Windows procedure of windows shown on the Task Bar is called with WM_SYSCOMMAND, when
+ //   the close button in the taskbar's mini window is clicked. That is, TApplication.WndProc (or TCustomForm.WndProc)
+ //   may be called with WM_SYSCOMMAND + SC_CLOSE, which in turn generates WM_CLOSE for TApplication.WndProc, which
+ //   calls TApplication.MainForm.Close, all from inside PeekMessage.
+ // - Despite what is being said in the PeekMessage() documentation and in the linked articles, WM_QUIT is never
+ //   retrieved if TGuiThread.Wait() is called during the creation of the main form (e.g. during OnActivate).
  //===================================================================================================================
-class procedure TGuiThread.Wait(Handle: THandle; TimeoutMillisecs: uint32);
+class function TGuiThread.Wait(const Handles: array of THandle; const Timeout: TTimeoutTime): integer;
+var
+  Msg: TMsg;
+  PostQuitMsg: boolean;
+begin
+  Assert(Windows.GetCurrentThreadId = System.MainThreadID);
 
-  // returns true when h is signaled or the timeout is reached:
-  function _Wait(h: THandle; const Timeout: TTimeoutTime): boolean;
-  var
-	MilliSecs: uint32;
-  begin
-	if TimeoutMillisecs = INFINITE then MilliSecs := INFINITE else MilliSecs := Timeout.AsMilliSecs;
-	case Windows.MsgWaitForMultipleObjects(1, h, false, MilliSecs, QS_PAINT or QS_TIMER or QS_POSTMESSAGE) of
-	WAIT_OBJECT_0, WAIT_TIMEOUT: Result := true;
-	else Result := false;
+  PostQuitMsg := false;
+
+  inc(FWaiting);
+  try
+
+	repeat
+
+	  // dispatch all waiting WM_PAINT, WM_TIMER and posted messages (including our WM_NULL); may throw exceptions during
+	  // this processing:
+	  repeat
+
+		// if a timer handler takes longer than its timer interval, it could prevent MsgWaitForMultipleObjects to ever
+		// return WAIT_TIMEOUT, as there is always some new message => explicit timeout check:
+		if Timeout.IsElapsed then exit(-1);
+
+		if not Windows.PeekMessage(Msg, 0, WM_PAINT, WM_PAINT, PM_REMOVE)
+		and not Windows.PeekMessage(Msg, 0, WM_TIMER, WM_TIMER, PM_REMOVE)
+		and not Windows.PeekMessage(Msg, HWND(-1), 0, 0, PM_REMOVE)
+		then break;
+
+		Assert(Msg.message <> WM_SYSCOMMAND);
+
+		// deferring WM_QUIT processing until after the wait:
+		if Msg.message = WM_QUIT then
+		  PostQuitMsg := true
+		else
+		  Windows.DispatchMessage(Msg);
+
+	  until false;
+
+	  // returns <WAIT_OBJECT_0 + Count> if a message caused the call to return:
+	  DWORD(Result) := Windows.MsgWaitForMultipleObjects(System.Length(Handles), Addr(Handles)^, false, Timeout.AsMilliSecs, QS_PAINT or QS_TIMER or QS_POSTMESSAGE);
+
+	  // signaled or error'd?
+	until Result <> System.Length(Handles);
+
+	case Result of
+	WAIT_OBJECT_0 .. WAIT_OBJECT_0 + MAXIMUM_WAIT_OBJECTS - 1:       dec(Result, WAIT_OBJECT_0);
+	WAIT_ABANDONED_0 .. WAIT_ABANDONED_0 + MAXIMUM_WAIT_OBJECTS - 1: dec(Result, WAIT_ABANDONED_0);
+	WAIT_TIMEOUT:  Result := -1;
+	else           raise EOSSysError.Create(Windows.GetLastError);
 	end;
+
+  finally
+	dec(FWaiting);
   end;
 
-var
-  t: TTimeoutTime;
-  Msg: TMsg;
-begin
-  t := TTimeoutTime.FromMillisecs(TimeoutMillisecs);
-
-  // dispatches WM_PAINT, WM_TIMER and posted messages (including our WM_NULL); may throw exceptions during
-  // this processing:
-  repeat
-
-	while Windows.PeekMessage(Msg, 0, WM_PAINT, WM_PAINT, PM_REMOVE)
-	  or Windows.PeekMessage(Msg, 0, WM_TIMER, WM_TIMER, PM_REMOVE)
-	  or Windows.PeekMessage(Msg, HWND(-1), 0, 0, PM_REMOVE)
-	do
-	  Windows.DispatchMessage(Msg);
-
-  until _Wait(Handle, t);
+  if PostQuitMsg then Windows.PostQuitMessage(0);
 end;
 
 

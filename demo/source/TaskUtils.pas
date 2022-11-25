@@ -6,6 +6,7 @@ interface
 
 uses
   SysUtils,
+  TimeoutUtil,
   Tasks;
 
 type
@@ -45,7 +46,7 @@ type
 
   strict private
 	type
-	  // Basis for generics TFuture classes with arbitrary result types:
+	  // Basis for generic TFuture classes with arbitrary result types:
 	  TFutureBase = class abstract (TInterfacedObject, ITask)
 	  strict protected
 		FTask: ITask;
@@ -55,7 +56,8 @@ type
 		function CompleteWH: TWaitHandle;
 		function UnhandledException: Exception;
 		function CancelObj: ICancel;
-		function Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean;
+		function Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean; overload;
+		function Wait(ThrowOnError: boolean; const Timeout: TTimeoutTime): boolean; overload;
 		// << ITask
 	  end;
 
@@ -101,6 +103,10 @@ end;
 function TParallel.TFutureBase.Wait(ThrowOnError: boolean; TimeoutMillisecs: uint32): boolean;
 begin
   Result := FTask.Wait(ThrowOnError, TimeoutMillisecs);
+end;
+function TParallel.TFutureBase.Wait(ThrowOnError: boolean; const Timeout: TTimeoutTime): boolean;
+begin
+  Result := FTask.Wait(ThrowOnError, Timeout);
 end;
 
 
