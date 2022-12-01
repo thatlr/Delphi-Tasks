@@ -328,12 +328,15 @@ end;
  // https://devblogs.microsoft.com/oldnewthing/20050217-00/?p=36423 "MsgWaitForMultipleObjects and the queue state"
  // https://devblogs.microsoft.com/oldnewthing/20060127-17/?p=32493 "Waiting for all handles with MsgWaitForMultipleObjects is a bug waiting to happen"
  // https://devblogs.microsoft.com/oldnewthing/20050222-00/?p=36393 "Modality, part 3: The WM_QUIT message"
+ // https://learn.microsoft.com/en-us/windows/win32/winmsg/about-messages-and-message-queues
  //
  // Observations:
- // - Inside PeekMessage, the Windows procedure of windows shown on the Task Bar is called with WM_SYSCOMMAND, when
+ // - The Windows procedure of windows shown on the Windows taskbar is called with WM_SYSCOMMAND from inside PeekMessage, when
  //   the close button in the taskbar's mini window is clicked. That is, TApplication.WndProc (or TCustomForm.WndProc)
  //   may be called with WM_SYSCOMMAND + SC_CLOSE, which in turn generates WM_CLOSE for TApplication.WndProc, which
- //   calls TApplication.MainForm.Close, all from inside PeekMessage.
+ //   calls TApplication.MainForm.Close, all from inside PeekMessage (so, this WM_SYSCOMMAND message is probably sent by
+ //   Explorer via SendNotifyMessage).
+ //   The same happens when trying to terminate the app via Task Manager's first page.
  // - Despite what is being said in the PeekMessage() documentation and in the linked articles, WM_QUIT is never
  //   retrieved if TGuiThread.Wait() is called during the creation of the main form (e.g. during OnActivate).
  //===================================================================================================================
@@ -345,7 +348,6 @@ begin
   Assert(Windows.GetCurrentThreadId = System.MainThreadID);
 
   PostQuitMsg := false;
-
   inc(FWaiting);
   try
 
@@ -389,9 +391,8 @@ begin
 
   finally
 	dec(FWaiting);
+	if PostQuitMsg then Windows.PostQuitMessage(0);
   end;
-
-  if PostQuitMsg then Windows.PostQuitMessage(0);
 end;
 
 
