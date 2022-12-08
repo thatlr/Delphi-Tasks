@@ -31,16 +31,6 @@ Also note that Windows only schedules threads within a single, static group of C
 
 ## Notes:
 
-### Interaction of tasks with the GUI:
-
-Please read: Code vs. UI modality: https://devblogs.microsoft.com/oldnewthing/tag/modality (especially part 2 & 4)
-
-When TGuiThread.Perform() is called to execute an action on the GUI thread, that action could display modal dialogs. A (code) modal dialog naturally executes a message loop that is supposed to terminate when the dialog is closed. Such a message loop allows all kinds of window messages to be dispatched, including messages for the modal dialog's parent window or for other non-modal dialogs that the appliation may display.
-
-To avoid reentrancy problems, a modal dialog must disable *all* other dialogs. Otherwise the application might run code for already destroyed GUI objects (see the explanation in the Old New Thing posts).
-
-However, this must *always* be taken into account when displaying a modal dialog, not just in the context of tasks.
-
 ### Unit finalization
 
 As always with methods that are used as callbacks (in this case: as task methods), you have to pay attention to the details of unit finalization in Delphi.
@@ -53,6 +43,38 @@ Such errors lead to mysterious memory leaks.
 Tested with:
 - Delphi 2009
 - Delphi 10.1.2 Berlin: 32bit and 64bit
+
+### Thread-Safety (general)
+
+The main concept to write thread-safe code is "ownership": In general, accessing variables or accessing properties or calling methods of Delphi objects not owned by the current thread is not safe (when not explicitly dodumented otherwise).
+
+At all times, you must make sure that a thread (a) only interacts with data (variables, objects, ...) that this thread is owning exclusively; or (b) uses serialization to access data shared between multiple threads. This serialization must be done by using explicit locks, like critical sections or reader-writer locks.
+
+Shared access to variables of reference-counted Delphi types (strings, interfaces, dynamic arrays) must be serialized with locks, even thought the ref-counting itself *is* thread-safe and multiple threads can safely use references to the very same string, interfaced object or dynamic array. Of course, the previous statement only applies when the variable to be accessed is potentially changing its value; there is no point in coordinating access to a variable which is guaranteed to be stable at all times other threads may read it. This all also applies to variables of type Variant/OleVariant, as such a variable can contain ref-counted values, or even custom Variant types with special code to perform the copy or conversion of the contained value to the target.
+
+Reads and writes to variables with a size greater than 32 bit in a 32 bit process (respective 64 bit in a 64 bit process) is not atomic and therefore needs also use locks. (Otherwise, a mix of the old and the new bytes may be read when the value is written at the very same time by another thread at a different CPU core.)
+
+### Thread-Safety: Delphi RTL
+
+Many stand-alone functions and procedures in the Delphi Runtime Library are thread-safe, as they do not access global variables. But as this not described in the documentation, it always better to check the RTL source code to verify this assumption.
+
+Some functions do read global variables, but it depends on the application, if this is a problem or not. For example, SysUtils.Format() without the explicit FormatSettings parameter uses the global variable SysUtils.FormatSettings. If the global regional settings never change, or if changes of this settings are not influencing the background processing, then this is not a problem. But to play it safe, the best aproach in this example is to always pass an explicit TFormatSettings variable with the expected content to functions that accept such argument.
+
+### Thread-Safety: Delphi VCL
+
+As the VCL is not thread-safe, tasks must not access VCL components directly, not even properties or methods of the global variables Application, Screen, Clipboard or Printer.
+
+All reads and writes of VCL properties, as also calls of VCL methods must be done inside a procedure that is passed to TGuiThread.Perform(). Perform() then posts a special message to the GUI thread and waits for its processing. When the GUI thread some time later retrieves this message from its message queue, it will execute the procedure passed to Perform(). After the GUI thread has finished executing the procedure (normally or per exception), it wakes up the task waiting inside Perform(). This mechanism enables tasks to safely interact with all the VCL objects and therefore to update the GUI.
+
+### Interaction of tasks with the GUI:
+
+Please read: Code vs. UI modality: https://devblogs.microsoft.com/oldnewthing/tag/modality (especially part 2 & 4)
+
+When TGuiThread.Perform() is called to execute an action on the GUI thread, that action could display modal dialogs. A (code) modal dialog naturally executes a message loop that is supposed to terminate when the dialog is closed. Such a message loop allows all kinds of window messages to be dispatched, including messages for the modal dialog's parent window or for other non-modal dialogs that the appliation may display.
+
+To avoid reentrancy problems, a modal dialog must disable *all* other dialogs. Otherwise the application might run code for already destroyed GUI objects (see the explanation in the Old New Thing posts).
+
+However, this must *always* be taken into account when displaying a modal dialog, not just in the context of tasks.
 
 ## Open issues:
 
