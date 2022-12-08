@@ -40,10 +40,6 @@ If this task assigns values to managed global variables (or "class variables") i
 since the cleanup of B's global variables is part of the unit finalization, which may have already been completed.
 Such errors lead to mysterious memory leaks.
 
-Tested with:
-- Delphi 2009
-- Delphi 10.1.2 Berlin: 32bit and 64bit
-
 ### Thread-Safety (general)
 
 The main concept to write thread-safe code is "ownership": In general, accessing variables or accessing properties or calling methods of Delphi objects not owned by the current thread is not safe (when not explicitly dodumented otherwise).
@@ -79,3 +75,8 @@ However, this must *always* be taken into account when displaying a modal dialog
 ## Open issues:
 
 Some sensible demo code.
+
+## Tested with:
+
+- Delphi 2009
+- Delphi 10.1.2 Berlin: 32bit and 64bit
