@@ -5,6 +5,14 @@ unit MsgBox;
   - Buttons are labeled according to the current UI language of the GUI thread.
   - The display position is centered to the current active window, not to the monitor.
 
+  Notes:
+  - Controlling the button captions in the message box is needed when your application can be switched between different
+	languages, by the user, at runtime. Part of such switch is calling SetProcessPreferredUILanguages(), so that system
+	message boxes (like File selection, Printer setup) are also using the language of your application's GUI.
+  - This statement in https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-messageboxexw is not true:
+	"If this parameter is MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), the current language associated with the calling thread is used."
+	You need to use the result of GetThreadUILanguage() to have the correct captions on the	buttons.
+
   In this demo, this is an example of an external Windows component that uses its own modal message loop.
 }
 
@@ -120,4 +128,3 @@ begin
 end;
 
 end.
-
