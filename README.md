@@ -40,15 +40,16 @@ If this task assigns values to managed global variables (or "class variables") i
 since the cleanup of B's global variables is part of the unit finalization, which may have already been completed.
 Such errors lead to mysterious memory leaks.
 
-### Thread-Safety (general)
+### Thread-Safety: General considerations
 
 The main concept to write thread-safe code is "ownership": In general, accessing variables or accessing properties or calling methods of Delphi objects not owned by the current thread is not safe (when not explicitly documented otherwise).
 
 At all times, you must make sure that a thread (a) only interacts with data (variables, objects, ...) that this thread is owning exclusively; or (b) uses serialization to access data shared between multiple threads. This serialization must be done by using explicit locks, like critical sections or reader-writer locks.
-
-Shared access to variables of reference-counted Delphi types (strings, interfaces, dynamic arrays) must be serialized with locks, even thought the ref-counting itself *is* thread-safe and multiple threads can safely use references to the very same string, interfaced object or dynamic array. Of course, the previous statement only applies when the variable to be accessed is potentially changing its value; there is no point in coordinating access to a variable which is guaranteed to be stable at all times other threads may read it. This all also applies to variables of type Variant/OleVariant, as such a variable can contain ref-counted values, or even custom Variant types with special code to perform the copy or conversion of the contained value to the target.
+Of course, there is no need for serialization when the variable is guaranteed to be stable at all times other threads may read it.
 
 Reads and writes of variables with a size greater than 32 bit in a 32 bit process (respective 64 bit in a 64 bit process) are not atomic and therefore need also locks. (Otherwise, a mix of the old and the new bytes may be read if the value is written by another thread at the very same time.)
+
+Shared access to variables of reference-counted Delphi types (strings, interfaces, dynamic arrays) must be serialized with locks, even thought the ref-counting itself *is* thread-safe and multiple threads can safely use references to the very same string, interfaced object or dynamic array. This also applies to variables of type Variant/OleVariant, as such a variable can contain ref-counted values, or even custom Variant types.
 
 ### Thread-Safety: Delphi RTL
 
@@ -62,7 +63,7 @@ As the VCL is not thread-safe, tasks must not access VCL components directly, no
 
 All reads and writes of VCL properties, as also calls of VCL methods must be done inside a procedure that is passed to TGuiThread.Perform(). Perform() then posts a special message to the GUI thread and waits for its processing. When the GUI thread some time later retrieves this message from its message queue, it will execute the procedure passed to Perform(). After the GUI thread has finished executing the procedure (normally or per exception), it wakes up the task waiting inside Perform(). This mechanism enables tasks to safely interact with all the VCL objects and therefore to update the GUI.
 
-### Interaction of tasks with the GUI:
+### Interaction of tasks with the GUI
 
 Please read: Code vs. UI modality: https://devblogs.microsoft.com/oldnewthing/tag/modality (especially part 2 & 4)
 
