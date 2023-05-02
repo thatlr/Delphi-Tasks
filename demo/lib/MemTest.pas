@@ -2,7 +2,9 @@ unit MemTest;
 
 {
   This unit can be integrated into programs to verify correct memory management. From the point of view of the program,
-  only the speed is adversely affected and more memory is used.
+  only the speed is adversely affected and more memory is used. If the application attempts to call FreeMem or
+  ReallocMem with an invalid pointer, an error is written to the console window (if any) or to a trace file, and the
+  process terminates without the call returning.
 
   The complete functionality is controlled by the precompiler symbol MEMTEST_ACTIVE:
   - MEMTEST_ACTIVE is undefined (Release builds): Memory allocations are not intercepted in any way.
@@ -70,9 +72,9 @@ type
 	Title: PAnsiChar;
 
 	ExpectedMemInbalance: _NativeUInt;		// Memory that is expected to be not released at the end of the program
-	AllocMemSize: _NativeUInt;				// currently allocated bytes (without MemManager overhead)
+	AllocMemSize: _NativeUInt;				// currently allocated bytes (without the added overhead)
 	AllocMemBlocks: _NativeUInt;			// currently allocated blocks
-	MaxAllocMemSize: _NativeUInt;			// previous maximum value of MyAllocMemSize
+	MaxAllocMemSize: _NativeUInt;			// previous maximum value of AllocMemSize
 
 	AllocBreakAddr: pointer;				// triggers debug-break if this address is returned by GetMem or Realloc
 	FreeBreakAddr: pointer;					// triggers debug-break stop if this address is passed to Free or Realloc
@@ -98,7 +100,8 @@ var
 
   ComInitCount: integer;					// number of "open" CoInitialize calls, over all threads
 
-  // as to whether a debug-break should be triggered in the event of alloc errors (e.g. out of memory):
+  // as to whether a debug-break should be triggered in the event of alloc errors (e.g. out of memory) in GetMem or
+  // ReallocMem:
   MyBreakOnAllocationError: boolean;
 
 
@@ -465,38 +468,41 @@ end;
  //===================================================================================================================
 function MyReallocMem(P: Pointer; _Size: _NativeInt): Pointer;
 var
-  Size: _NativeUInt absolute _Size;
-  PP: PPreRec;
+  NewSize: _NativeUInt absolute _Size;
   OldSize: _NativeUInt;
+  NewPP: PPreRec;
+  OldPP: PPreRec;
 begin
   // Delphi never passes nil and always passes positive values:
   // (means: ReallocMem() from zero to non-zero size is done as GetMem(), and ReallocMem() from non-zero to zero size
   // is done as FreeMem().)
   Assert((P <> nil) and (_Size > 0));
 
-  PP := DelphiMem.Dequeue( P );
+  OldPP := DelphiMem.Dequeue( P );
 
-  OldSize := PP^.Size;
+  OldSize := OldPP^.Size;
 
-  if Size < OldSize then begin
+  if NewSize < OldSize then begin
 	// overwrite the released memory, including the old TPostRec data:
-	FillChar((PByte(PP) + sizeof(TPreRec) + Size)^, (OldSize - Size) + sizeof(TPostRec), MyFreeFillByte);
+	FillChar((PByte(OldPP) + sizeof(TPreRec) + NewSize)^, (OldSize - NewSize) + sizeof(TPostRec), MyFreeFillByte);
   end;
 
-  PP := OldMgr.ReallocMem(PP, Size + sizeof(TPreRec) + sizeof(TPostRec));
+  NewPP := OldMgr.ReallocMem(OldPP, NewSize + sizeof(TPreRec) + sizeof(TPostRec));
 
-  if PP = nil then begin
+  if NewPP = nil then begin
+	// not relocated due to some error => enqueue the orginal block:
+	DelphiMem.Enqueue( OldPP, OldSize );
 	if MyBreakOnAllocationError then
 	  MyDebugBreak;
 	exit(nil);
   end;
 
-  // enqueue the block:
-  Result := DelphiMem.Enqueue( PP, Size );
+  // enqueue the relocated block:
+  Result := DelphiMem.Enqueue( NewPP, NewSize );
 
-  if Size > OldSize then begin
+  if NewSize > OldSize then begin
 	// fill the newly allocated memory:
-	FillChar((PByte(Result) + OldSize)^, Size - OldSize, MyAllocFillByte);
+	FillChar((PByte(Result) + OldSize)^, NewSize - OldSize, MyAllocFillByte);
   end;
 end;
 
@@ -535,7 +541,7 @@ end;
 
 
  //===================================================================================================================
- // Chain <Block> to FList.Next. Update statistics. Return pointer to the Payload area of <Block>:
+ // Chain <Block> to FList. Update statistics. Return pointer to the payload area of <Block>:
  //===================================================================================================================
 function TBlockList.Enqueue(Block: PPreRec; Size: _NativeUInt): pointer;
 begin
@@ -567,8 +573,8 @@ end;
 
 
  //===================================================================================================================
- // Unchain <Block>. Update statistics. Return pointer to the TPreRect data.
- // If the block is damaged, a message is issued, trace file output is generated and the process is killed.
+ // Unchain <Payload>. Update statistics. Return pointer to the TPreRect data.
+ // If the block is invalid, a message is issued, trace file output is generated and the process is killed.
  //===================================================================================================================
 function TBlockList.Dequeue(Payload: pointer): PPreRec;
 begin
@@ -579,7 +585,7 @@ begin
 
   FLock.AcquireExclusive;
 
-	// IsValidBlock tests the Prev and Next pointers, which could be alterted by other threads in parallel
+	// IsValidBlock tests the Prev and Next pointers, which could be modified in parallel by other threads.
 	// => the check must be done within the lock
 
 	if not self.IsValidBlock(Result) then begin
