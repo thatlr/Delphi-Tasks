@@ -98,14 +98,12 @@ var
 	FreeBreakSize: High(_NativeUInt);
   );
 
-  ComInitCount: integer;					// number of "open" CoInitialize calls, over all threads
-
   // as to whether a debug-break should be triggered in the event of alloc errors (e.g. out of memory) in GetMem or
   // ReallocMem:
   MyBreakOnAllocationError: boolean;
 
 
-procedure DumpAllocatedBlocks(const Filename: string);
+procedure DumpAllocatedBlocks(const Filename: string; WithHexDump: boolean = true);
 function IsMemoryValid: boolean;
 
 
@@ -322,7 +320,7 @@ type
 	function Dequeue(Payload: pointer): PPreRec;
 
 	function IsValidList: boolean;
-	procedure DumpList(Filename: PChar; DoLock, CheckForDelphiClasses: boolean);
+	procedure DumpList(Filename: PChar; DoLock, CheckForDelphiClasses, WithHexDump: boolean);
 	procedure CheckMemoryLeak(IsDelphiMem: boolean);
 	procedure MemErr(p: PPreRec);
 	class function IsValidBlock(P: PPreRec): boolean; static;
@@ -639,7 +637,7 @@ end;
  // - Delphi class: "<ClassName>"
  // - other: "-"
  //===================================================================================================================
-procedure TBlockList.DumpList(Filename: PChar; DoLock, CheckForDelphiClasses: boolean);
+procedure TBlockList.DumpList(Filename: PChar; DoLock, CheckForDelphiClasses, WithHexDump: boolean);
 type
   // from System.pas
   PStrRec = ^TStrRec;
@@ -754,17 +752,20 @@ begin
 	  end;
 
 	  WriteStrToFile(hFile, ['Addr: ', PtrToHex(q), '  Size: ', NUIntToStr(p^.Size), '  Type: ', ClassName, CrLf]);
-	  if p^.Size <= MaxDumpSize then begin
-		// dump whole block:
-		WriteHexDump(hFile, q, p^.Size);
-	  end
-	  else begin
-		// dump only beginning and end of block:
-		WriteHexDump(hFile, q, MaxDumpSize div 2);
-		WriteStrToFile(hFile, ['           .................' + CrLf]);
-		WriteHexDump(hFile, q + p^.Size - MaxDumpSize div 2, MaxDumpSize div 2);
+
+	  if WithHexDump then begin
+		if p^.Size <= MaxDumpSize then begin
+		  // dump whole block:
+		  WriteHexDump(hFile, q, p^.Size);
+		end
+		else begin
+		  // dump only beginning and end of block:
+		  WriteHexDump(hFile, q, MaxDumpSize div 2);
+		  WriteStrToFile(hFile, ['           .................' + CrLf]);
+		  WriteHexDump(hFile, q + p^.Size - MaxDumpSize div 2, MaxDumpSize div 2);
+		end;
+		WriteStrToFile(hFile, [CrLf]);
 	  end;
-	  WriteStrToFile(hFile, [CrLf]);
 
 	  p := p^.Next;
 	end;
@@ -817,7 +818,7 @@ procedure TBlockList.CheckMemoryLeak(IsDelphiMem: boolean);
 begin
   if (FStats.AllocMemSize > FStats.ExpectedMemInbalance) or (FStats.ExpectedMemInbalance = 0) and (FStats.AllocMemBlocks <> 0) then begin
 	SignalError([FStats.Title, ' Memory still allocated: ', NUIntToStr(FStats.AllocMemSize), ' byte in ', NUIntToStr(FStats.AllocMemBlocks) , ' blocks']);
-	self.DumpList('memdump_allocated_blocks.txt', false, IsDelphiMem);
+	self.DumpList('memdump_allocated_blocks.txt', false, IsDelphiMem, true);
   end
   else if FStats.AllocMemSize < FStats.ExpectedMemInbalance then begin
 	SignalError([FStats.Title, ' Memory imbalance detected: ', NUIntToStr(FStats.AllocMemSize), ' <> ', NUIntToStr(FStats.ExpectedMemInbalance)]);
@@ -840,9 +841,9 @@ end;
  // Appends a dump of all allocated memory blocks to the given file.
  // This temporarly blocks all other threads on doing heap operations.
  //===================================================================================================================
-procedure DumpAllocatedBlocks(const Filename: string);
+procedure DumpAllocatedBlocks(const Filename: string; WithHexDump: boolean);
 begin
-  DelphiMem.DumpList(PChar(Filename), true, true);
+  DelphiMem.DumpList(PChar(Filename), true, true, WithHexDump);
 end;
 
 
@@ -1160,129 +1161,6 @@ begin
 end;
 
 
-type
-  // structure to implement IInitializeSpy as a singleton object:
-  TComInitSpy = record
-  strict private
-	class var
-	  FCookie: ULARGE_INTEGER;
-	var
-	  FVMT: pointer;
-
-	function QueryInterface(const IID: TGUID; out Obj: pointer): HResult; stdcall;
-	function AddRef: Integer; stdcall;
-	function Release: Integer; stdcall;
-	function PreInitialize(dwCoInit: DWORD; dwCurThreadAptRefs: DWORD): HRESULT; stdcall;
-	function PostInitialize(hrCoInit: HRESULT; dwCoInit: DWORD; dwNewThreadAptRefs: DWORD): HRESULT; stdcall;
-	function PreUninitialize(dwCurThreadAptRefs: DWORD): HRESULT; stdcall;
-	function PostUninitialize(dwNewThreadAptRefs: DWORD): HRESULT; stdcall;
-  public
-	class procedure Init; static; inline;
-	class procedure Fini; static; inline;
-  end;
-
-
-{ TComInitSpy }
-
- //===================================================================================================================
- //===================================================================================================================
-function TComInitSpy.QueryInterface(const IID: TGUID; out Obj: pointer): HResult;
-begin
-  if IsEqualGUID(IID, IInitializeSpy) then begin
-	Obj := @self;
-	Result := S_OK;
-  end
-  else begin
-	Obj := nil;
-	Result := E_NOINTERFACE;
-  end;
-end;
-
-
- //===================================================================================================================
- // Is called before each of the IInitializeSpy calls
- //===================================================================================================================
-function TComInitSpy.AddRef: Integer;
-begin
-  Result := 1;
-end;
-
-
- //===================================================================================================================
- // Is called after each of the IInitializeSpy calls
- //===================================================================================================================
-function TComInitSpy.Release: Integer;
-begin
-  Result := 1;
-end;
-
-
- //===================================================================================================================
- //===================================================================================================================
-function TComInitSpy.PreInitialize(dwCoInit: DWORD; dwCurThreadAptRefs: DWORD): HRESULT;
-begin
-  Result := S_OK;
-end;
-
-
- //===================================================================================================================
- //===================================================================================================================
-function TComInitSpy.PostInitialize(hrCoInit: HRESULT; dwCoInit: DWORD; dwNewThreadAptRefs: DWORD): HRESULT;
-begin
-  if (hrCoInit = S_OK) or (hrCoInit = S_FALSE) then Windows.InterlockedIncrement(ComInitCount);
-  Result := hrCoInit;
-end;
-
-
- //===================================================================================================================
- //===================================================================================================================
-function TComInitSpy.PreUninitialize(dwCurThreadAptRefs: DWORD): HRESULT;
-begin
-  Windows.InterlockedDecrement(ComInitCount);
-  Result := S_OK;
-end;
-
-
- //===================================================================================================================
- //===================================================================================================================
-function TComInitSpy.PostUninitialize(dwNewThreadAptRefs: DWORD): HRESULT;
-begin
-  Result := S_OK;
-end;
-
-
- //===================================================================================================================
- // install COM initialization monitoring:
- //===================================================================================================================
-class procedure TComInitSpy.Init;
-const
-  VMT: array [0..6] of Pointer =
-  (
-	@TComInitSpy.QueryInterface,
-	@TComInitSpy.AddRef,
-	@TComInitSpy.Release,
-	@TComInitSpy.PreInitialize,
-	@TComInitSpy.PostInitialize,
-	@TComInitSpy.PreUninitialize,
-	@TComInitSpy.PostUninitialize
-  );
-
-  // static singleton COM object:
-  Obj: TComInitSpy = (FVMT: @VMT);
-begin
-  CoRegisterInitializeSpy(IInitializeSpy(@Obj), FCookie);
-end;
-
-
- //===================================================================================================================
- // uninstall COM initialization monitoring (always succeeds):
- //===================================================================================================================
-class procedure TComInitSpy.Fini;
-begin
-  CoRevokeInitializeSpy(FCookie);
-end;
-
-
  //===================================================================================================================
  //===================================================================================================================
 procedure Install;
@@ -1314,9 +1192,6 @@ begin
 
   // install COM memory monitoring:
   TComAllocSpy.Init;
-
-  // install COM initialization monitoring:
-  TComInitSpy.Init;
 end;
 
 
@@ -1326,9 +1201,6 @@ procedure CheckMemoryStatus;
 begin
   // report Delphi memory leaks:
   DelphiMem.CheckMemoryLeak(true);
-
-  // uninstall COM initialization monitoring (always succeeds):
-  TComInitSpy.Fini;
 
   // revoke COM memory monitoring
   TComAllocSpy.Fini;
@@ -1362,7 +1234,7 @@ begin
   Result := true;
 end;
 
-procedure DumpAllocatedBlocks(const Filename: string);
+procedure DumpAllocatedBlocks(const Filename: string; WithHexDump: boolean = true);
 begin
   // nothing
 end;
