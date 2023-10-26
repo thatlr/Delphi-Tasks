@@ -664,7 +664,7 @@ var
 
   function _CanReadData(Addr: PByte; Size: uint32): boolean;
   begin
-	Result := (Addr >= MinDataAddr) and (Addr + Size <= MaxDataAddr);
+	Result := (Addr >= MinDataAddr) and (Addr <= MaxDataAddr - Size);
   end;
 
   function _TryGetClassName(Block: pointer; BlockSize: _NativeUInt; var ClassName: ShortString): boolean;
