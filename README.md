@@ -31,11 +31,37 @@ Also note that Windows only schedules threads within a single, static group of C
 
 ## Notes:
 
+### Shutdown behavior
+
+When TThreadPool.Destroy is invoked, the teardown is done as follows:
+
+First, the thread pool is immediately locked against queuing of new tasks. This is crucial because tasks already
+executing within the pool might attempt to enqueue follow-up tasks. While TThreadPool.Queue() calls will still
+succeed, any task created is immediately terminated with the status TTaskStatus.Discarded.
+
+Second, Destroy() waits —without timeout— for all tasks associated with the thread pool to finish. This includes
+both queued and currently executing tasks. Importantly, it does not cancel any tasks; it simply blocks until all are done.
+
+Third, as there are now no outstanding tasks and no active threads, the actual destruction is executed. 
+
+Important Considerations:
+
+The application must ensure that all outstanding tasks will complete in a timely manner. Typically, this involves
+sending cancellation signals and designing the task functions to respond to them appropriately.
+
+Shared variables holding a TThreadPool reference must not be set to nil too soon. As noted above, tasks may rely on such a
+shared variable to enqueue additional work to the same thread pool. In such case, FreeAndNil() cannot be used because it sets
+the variable to nil *before* calling Destroy(), potentially breaking the tasks that still depend on it.
+
+(In general, instead of FreaAndNil you should use an alternative procedure which first calls destroy and then set the variable
+to nil, as this is also more correct in other scenarios.)
+
 ### Unit finalization
 
 As always with methods that are used as callbacks (in this case: as task methods), you have to pay attention to the details of unit finalization in Delphi.
 For example, if you have a task that is performing a method from Unit B, and then code in the finalization section of Unit A is stopping that task, it is very possible
 that the finalization of unit B was carried out before the task reacts to the cancellation and finally ends.
+
 If this task assigns values to managed global variables (or "class variables") in unit B, these values (most commonly: strings) may never be cleaned up,
 since the cleanup of B's global variables is part of the unit finalization, which may have already been completed.
 Such errors lead to mysterious memory leaks.

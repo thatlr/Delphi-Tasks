@@ -71,7 +71,7 @@ procedure Win32Check(RetVal: BOOL; const Ctx: string); overload;
 //
 
 {$ifdef Delphi104}
-procedure FreeObj(const [ref] ObjVar: TObject);
+procedure FreeObj(const [ref] Obj: TObject);
 {$else}
 procedure FreeObj(var Obj {: TObject});
 {$endif}
@@ -269,40 +269,27 @@ end;
 
 
  //===================================================================================================================
- // Sets <ObjVar> to nil and releases the referenced object *thereafter*.
- // Advantages compared to calling .Free directly:
- // - After the call, the passed variable or the passed field no longer points to memory that has already been released.
- // - The call can safely be used in a destructor, even if the field was never assigned a value due to an exception in
- //   the constructor.
- //
- // Like FreeAndNil(), but the original FreeAndNil is (a) defined inline, which generates too much code and (b) when
- // inlined in another inlined procedure, generates incorrect code (compiler bug, but also questionable code trick to
- // access the 'var' parameter).
+ // Releases <ObjVar> and then set it to nil.
+ // Like FreeAndNil(), but with key differences:
+ // (a) The original FreeAndNil() is defined inline, which results in excessive code generation.
+ // (b) When used inside another inlined procedure, it can produce incorrect code due to a compiler bug in Delphi 2009.
+ // (c) FreeAndNil() first sets the variable to nil before calling Destroy. This sequence can cause issues if the object
+ //     is still needed during its destruction - for instance, through self-deregistration mechanisms or if the destructor
+ //     waits on other objects which may still refer to the one being destroyed.
  //===================================================================================================================
 {$ifdef Delphi104}
-procedure FreeObj(const [ref] ObjVar: TObject);
-var
-  tmp: TObject;
-begin
-  if ObjVar <> nil then begin
-	tmp := ObjVar;
-	PPointer(@ObjVar)^ := nil;
-	tmp.Destroy;
-  end;
-end;
+procedure FreeObj(const [ref] Obj: TObject);
 {$else}
 procedure FreeObj(var Obj {: TObject});
+{$endif}
 var
   ObjVar: TObject absolute Obj;
-  tmp: TObject;
 begin
   if ObjVar <> nil then begin
-	tmp := ObjVar;
+	ObjVar.Destroy;
 	ObjVar := nil;
-	tmp.Destroy;
   end;
 end;
-{$endif}
 
 
 initialization
