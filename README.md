@@ -106,4 +106,6 @@ Some sensible demo code.
 ## Tested with:
 
 - Delphi 2009
+- Delphi XE
 - Delphi 10.1.2 Berlin: 32bit and 64bit
+- Delphi 12.1 Athens: 32bit and 64bit
