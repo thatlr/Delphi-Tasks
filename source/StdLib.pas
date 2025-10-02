@@ -71,9 +71,9 @@ procedure Win32Check(RetVal: BOOL; const Ctx: string); overload;
 //
 
 {$ifdef Delphi104}
-procedure FreeObj(const [ref] Obj: TObject);
+procedure FreeObj(const [ref] ObjVar: TObject);
 {$else}
-procedure FreeObj(var Obj {: TObject});
+procedure FreeObj(var ObjVar {: TObject});
 {$endif}
 
 
@@ -278,16 +278,18 @@ end;
  //     waits on other objects which may still refer to the one being destroyed.
  //===================================================================================================================
 {$ifdef Delphi104}
-procedure FreeObj(const [ref] Obj: TObject);
+procedure FreeObj(const [ref] ObjVar: TObject);
 {$else}
-procedure FreeObj(var Obj {: TObject});
+procedure FreeObj(var ObjVar {: TObject});
 {$endif}
 var
-  ObjVar: TObject absolute Obj;
+  Obj: TObject absolute ObjVar;
+  tmp: TObject;
 begin
-  if ObjVar <> nil then begin
-	ObjVar.Destroy;
-	ObjVar := nil;
+  if Obj <> nil then begin
+	tmp := Obj;
+	PPointer(@Obj)^ := nil;
+	tmp.Destroy;
   end;
 end;
 
