@@ -40,11 +40,11 @@ uses
 { TMsgBox }
 
  //=============================================================================
- // Displays the Windows "TaskDialog" message box.
+ // Displays a message box using Windows built-in "TaskDialog".
  // The buttons in the dialog are labeled according to the GUI language of the calling thread, and the dialog is
  // centered in front of the application's active window.
+ // In <Buttons> the same values as for MsgBox(,,,uType) are used.
  // If the dialog is closed by ESC, IDCANCEL is returned.
- // In <Buttons> you pass the same values as for MsgBox(,,,uType).
  // Note: MB_ABORTRETRYIGNORE is handled as MB_RETRYCANCEL.
  //===================================================================================================================
 class function TMsgBox.Show(const Msg: string; Buttons: uint; const Caption: string): integer;
@@ -56,8 +56,8 @@ class function TMsgBox.Show(const Msg: string; Buttons: uint; const Caption: str
 
   procedure _InitCfg(out Cfg: CommCtrl.TTaskDialogConfig);
   var
-	Btn: DWORD;
-	DefBtn2: DWORD;
+	Btns: byte;
+	DefBtn2: byte;
 	ID: LPCWSTR;
   begin
 	FillChar(Cfg, sizeof(Cfg), 0);
@@ -72,15 +72,15 @@ class function TMsgBox.Show(const Msg: string; Buttons: uint; const Caption: str
 	  Cfg.dwFlags := Cfg.dwFlags or TDF_RTL_LAYOUT;
 
 	case Buttons and MB_TYPEMASK of
-	MB_OKCANCEL:    begin Btn := TDCBF_OK_BUTTON or TDCBF_CANCEL_BUTTON; DefBtn2 := TDCBF_CANCEL_BUTTON; end;
-	MB_YESNOCANCEL: begin Btn := TDCBF_YES_BUTTON or TDCBF_NO_BUTTON or TDCBF_CANCEL_BUTTON; DefBtn2 := TDCBF_CANCEL_BUTTON; end;
-	MB_YESNO:       begin Btn := TDCBF_YES_BUTTON or TDCBF_NO_BUTTON; DefBtn2 := TDCBF_NO_BUTTON; end;
+	MB_OKCANCEL:    begin Btns := TDCBF_OK_BUTTON or TDCBF_CANCEL_BUTTON; DefBtn2 := IDCANCEL; end;
+	MB_YESNOCANCEL: begin Btns := TDCBF_YES_BUTTON or TDCBF_NO_BUTTON or TDCBF_CANCEL_BUTTON; DefBtn2 := IDCANCEL; end;
+	MB_YESNO:       begin Btns := TDCBF_YES_BUTTON or TDCBF_NO_BUTTON; DefBtn2 := IDNO; end;
 	MB_ABORTRETRYIGNORE,	// IGNORE and ABORT are not supported
-	MB_RETRYCANCEL: begin Btn := TDCBF_RETRY_BUTTON or TDCBF_CANCEL_BUTTON; DefBtn2 := TDCBF_CANCEL_BUTTON; end;
-	else {MB_OK:}   begin Btn := TDCBF_OK_BUTTON; DefBtn2 := TDCBF_OK_BUTTON; end;
+	MB_RETRYCANCEL: begin Btns := TDCBF_RETRY_BUTTON or TDCBF_CANCEL_BUTTON; DefBtn2 := IDCANCEL; end;
+	else {MB_OK:}   begin Btns := TDCBF_OK_BUTTON; DefBtn2 := IDOK; end;
 	end;
 
-	Cfg.dwCommonButtons := Btn;
+	Cfg.dwCommonButtons := Btns;
 	if Buttons and MB_DEFMASK > MB_DEFBUTTON1 then
 	  Cfg.nDefaultButton := DefBtn2;
 
