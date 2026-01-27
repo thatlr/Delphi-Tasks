@@ -1088,6 +1088,7 @@ begin
   until false;
 
   // would be returned by Windows.GetExitCodeThread, but irrelevant here:
+  System.EndThread(0);
   Result := 0;
 end;
 
