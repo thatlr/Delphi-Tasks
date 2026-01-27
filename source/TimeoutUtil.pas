@@ -23,7 +23,7 @@ type
   TTimeoutTime = record
   strict private
 	const
-	  FInfinite = uint64(High(int64));		// not cause overflow in the signed subtraction in RemainingMilliSecs (roughly 292m years)
+	  FInfinite = uint64(High(int64));
 	var
 	  FTimeoutTime: uint64;					// time when the timeout expires (in terms of GetTickCount64)
 
@@ -34,13 +34,11 @@ type
 	constructor FromSecs(Value: uint32);
 	class function Elapsed: TTimeoutTime; inline; static;
 	class function Infinite: TTimeoutTime; inline; static;
-	class function Undefined: TTimeoutTime; static; deprecated 'use "Infinite"';
 
 	function AsSeconds: uint32;
 	function AsMilliSecs: uint32;
 	function IsElapsed: boolean;
 	function IsInfinite: boolean; {$ifdef CPU64BITS}inline;{$endif}
-	function IsDefined: boolean; deprecated 'use "not .IsInfinite"';
   end;
 
 
@@ -84,29 +82,11 @@ end;
 
 
  //===================================================================================================================
- // Obsolete.
- //===================================================================================================================
-class function TTimeoutTime.Undefined: TTimeoutTime;
-begin
-  Result := TTimeoutTime.Infinite;
-end;
-
-
- //===================================================================================================================
  // Returns true if the timeout is "Infinite".
  //===================================================================================================================
 function TTimeoutTime.IsInfinite: boolean;
 begin
   Result := FTimeoutTime = FInfinite;
-end;
-
-
- //===================================================================================================================
- // Obsolete.
- //===================================================================================================================
-function TTimeoutTime.IsDefined: boolean;
-begin
-  Result := not self.IsInfinite;
 end;
 
 
@@ -238,4 +218,3 @@ end;
 initialization
   Assert(UnitTest);
 end.
-
