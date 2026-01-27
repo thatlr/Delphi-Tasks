@@ -38,6 +38,27 @@ unit MemTest;
 	  SetUnicodeStrProp(Instance, PropInfo, ReadWideString);
   which wrongly forces WideStrings to be created (using COM memory!), only to be converted to UnicodeStrings immediately
   thereafter. Which happens when .dfm files are loaded.
+
+
+  Note:
+
+  COM Bug: "CoRegisterMallocSpy causes unit tests to fail periodically": https://github.com/microsoft/wil/pull/359
+
+  >>
+  It tries to clean up the CComCLBCatalog, and that calls CoTaskMemFree, but the CoTaskMemFree mutex has already been
+  destroyed. CoTaskMemFree then starts a new round of delay-initialization, and that tries to store some state in the
+  TLS, which has already been torn down.
+
+  ....
+
+  Okay, I found it. It turns out that CoRegisterMallocSpy is sticky. If you register a malloc spy and then unregister
+  it, the state does not completely revert to the "malloc spy not registered" state. Unregistering the malloc spy just
+  replaces the malloc spy with a dummy one, but the "active malloc" vtable is still set to "Check for an active malloc
+  spy", and we try to delay-initialize the malloc-spy mutex.
+
+  I think this is a COM bug, exacerbated by the fact that C++/WinRT intentionally leaks a COM initialization, which
+  forces COM to do "desperation cleanup" inside DLL_PROCESS_DETACH.
+  <<
 }
 
 {$include LibOptions.inc}
@@ -298,7 +319,7 @@ type
   // is placed in front of each allocated block (always aligned):
   PPreRec = ^TPreRec;
   TPreRec = record
-	Next, Prev: PPreRec;		// allocated blocks form a doubly linked lists
+	Next, Prev: PPreRec;		// allocated blocks form a doubly linked list
 	Size: _NativeUInt;			// Size of the allocated memory block
 	Key: _NativeUInt;			// special value (PreMemKey) to detect memory corruption
   end;
@@ -917,7 +938,7 @@ type
   end;
 
 threadvar
-  gRequestedSize: _NativeUInt;
+  gOrgSize: _NativeUInt;
 
 
 { TComAllocSpy }
@@ -970,7 +991,7 @@ end;
  //===================================================================================================================
 function TComAllocSpy.PreAlloc(cbRequest: SIZE_T): SIZE_T;
 begin
-  gRequestedSize := cbRequest;
+  gOrgSize := cbRequest;
 
   Result := cbRequest + sizeof(TPreRec) + sizeof(TPostRec);
 end;
@@ -982,9 +1003,9 @@ begin
 
   // nil only occurs if COM could not allocate memory (out-of-memory):
   if Result <> nil then begin
-	Result := ComMem.Enqueue(Result, gRequestedSize);
+	Result := ComMem.Enqueue(Result, gOrgSize);
 	// fill the newly allocated memory:
-	FillChar(Result^, gRequestedSize, MyAllocFillByte);
+	FillChar(Result^, gOrgSize, MyAllocFillByte);
   end
   else if MyBreakOnAllocationError then begin
 	MyDebugBreak;
@@ -1024,7 +1045,7 @@ begin
 	exit(NewSize);
   end;
 
-  gRequestedSize := NewSize;
+  gOrgSize := NewSize;
 
   if pRequest <> nil then begin
 
@@ -1054,7 +1075,7 @@ begin
 	// nil only occurs if COM could not allocate memory (out-of-memory):
 	if Result <> nil then begin
 	  OldSize := PPreRec(Result)^.Size;
-	  NewSize := gRequestedSize;
+	  NewSize := gOrgSize;
 
 	  Result := ComMem.Enqueue(Result, NewSize);
 
@@ -1077,14 +1098,17 @@ end;
 function TComAllocSpy.PreGetSize(pRequest: Pointer; fSpyed: BOOL): Pointer;
 begin
   Result := pRequest;
-  if fSpyed then Result := PByte(Result) - sizeof(TPreRec);
+  if fSpyed then begin
+	dec(PByte(Result), sizeof(TPreRec));
+	gOrgSize := PPreRec(Result)^.Size;
+  end;
 end;
 
  // Result = byte count to be returned by IMalloc::GetSize
 function TComAllocSpy.PostGetSize(cbActual: SIZE_T; fSpyed: BOOL): SIZE_T;
 begin
   Result := cbActual;
-  if fSpyed then Result := Result - sizeof(TPreRec) - sizeof(TPostRec);
+  if fSpyed then Result := gOrgSize;
 end;
 
 
@@ -1094,7 +1118,7 @@ end;
 function TComAllocSpy.PreDidAlloc(pRequest: Pointer; fSpyed: BOOL): Pointer;
 begin
   Result := pRequest;
-  if fSpyed then Result := PByte(Result) - sizeof(TPreRec);
+  if fSpyed then dec(PByte(Result), sizeof(TPreRec));
 end;
 
  // Result = value to be returned by IMalloc::DidAlloc (-1, 0, +1)
