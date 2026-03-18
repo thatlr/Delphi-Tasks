@@ -102,7 +102,7 @@ var
   WindowList: Forms.TTaskWindowList;
   FocusState: Forms.TFocusState;
 begin
-  // the wrapper for LoadIconMetric() in CommCtrl.pas dont call InitComCtl, like done in the TaskDialogIndirect wrapper:
+  // the wrapper for LoadIconMetric() in CommCtrl.pas does not call InitComCtl, like done in the TaskDialogIndirect wrapper:
   Init.dwSize := sizeof(Init);
   Init.dwICC := ICC_STANDARD_CLASSES;
   CommCtrl.InitCommonControlsEx(Init);
