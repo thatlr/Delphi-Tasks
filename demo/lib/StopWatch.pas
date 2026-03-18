@@ -47,7 +47,7 @@ end;
 
 
  //=============================================================================
- // Returns the time elapsed since Start() was called. Can be called repeatly.
+ // Returns the number of seconds elapsed since the Start() call. Can be called repeatedly.
  //=============================================================================
 function TStopWatch.ElapsedSecs: double;
 var
