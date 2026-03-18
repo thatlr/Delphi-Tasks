@@ -1186,42 +1186,10 @@ end;
 
 
  //===================================================================================================================
+ // If not compiled into a DLL: Called via System.ExitProcessProc, after everything (including the System unit) is
+ // finalized.
  //===================================================================================================================
-procedure Install;
-
-  function NoMemoryAllocated: boolean;
-  var
-	State: TMemoryManagerState;
-  begin
-	// no memory must be allocated at this point:
-	System.GetMemoryManagerState(State);
-	Result := (State.AllocatedMediumBlockCount = 0) and (State.AllocatedLargeBlockCount = 0);
-  end;
-
-const
-  MemMgr: TMemoryManagerEx = (
-	GetMem: MyGetMem;
-	FreeMem: MyFreeMem;
-	ReallocMem:	MyReallocMem;
-	AllocMem: MyAllocMem;
-	RegisterExpectedMemoryLeak: MyRegisterExpectedMemoryLeak;
-	UnregisterExpectedMemoryLeak: MyUnregisterExpectedMemoryLeak;
-  );
-begin
-  Assert(NoMemoryAllocated, 'Memory already allocated');
-
-  // replace the existing memory manager:
-  GetMemoryManager(OldMgr);
-  SetMemoryManager(MemMgr);
-
-  // install COM memory monitoring:
-  TComAllocSpy.Init;
-end;
-
-
- //===================================================================================================================
- //===================================================================================================================
-procedure CheckMemoryStatus;
+procedure ProcessTermination;
 begin
   // report Delphi memory leaks:
   DelphiMem.CheckMemoryLeak(true);
@@ -1238,13 +1206,53 @@ begin
 end;
 
 
-initialization
-  Install;
+ //===================================================================================================================
+ // Only for Assert in initialization section:
+ //===================================================================================================================
+function NoMemoryAllocated: boolean;
+var
+  State: TMemoryManagerState;
+begin
+  // no memory must be allocated at this point:
+  System.GetMemoryManagerState(State);
+  Result := (State.AllocatedMediumBlockCount = 0) and (State.AllocatedLargeBlockCount = 0);
+end;
 
-  // Bug in Delphi XE2 and up: FreeMem(PreferredLanguagesOverride) in the finalization section of System.pas runs
-  // after the finalization of every unit => CheckMemoryStatus can only run thereafter
-  PrevExitProcessProc := System.ExitProcessProc;
-  System.ExitProcessProc := CheckMemoryStatus;
+
+const
+  MemMgr: TMemoryManagerEx = (
+	GetMem: MyGetMem;
+	FreeMem: MyFreeMem;
+	ReallocMem:	MyReallocMem;
+	AllocMem: MyAllocMem;
+	RegisterExpectedMemoryLeak: MyRegisterExpectedMemoryLeak;
+	UnregisterExpectedMemoryLeak: MyUnregisterExpectedMemoryLeak;
+  );
+
+initialization
+  Assert(NoMemoryAllocated, 'Memory already allocated');
+
+  // replace the existing memory manager:
+  GetMemoryManager(OldMgr);
+  SetMemoryManager(MemMgr);
+
+  if not System.IsLibrary then begin
+	// install COM memory monitoring (not for DLLs, as the COM allocator is used process-wide):
+	TComAllocSpy.Init;
+
+	// Bug in Delphi XE2 and up: FreeMem(PreferredLanguagesOverride) in the finalization section of System.pas runs
+	// after the finalization of every unit => ProcessTermination can only run thereafter
+	PrevExitProcessProc := System.ExitProcessProc;
+	System.ExitProcessProc := ProcessTermination;
+  end;
+
+finalization
+  if System.IsLibrary then begin
+	// as the System unit is finalized after every other unit, this code here is executed before and cannot handle
+	// allocations in the System unit which got only released thereafter. Due to this, SetMemoryManager(OldMgr) is
+	// not called, so the System unit can release memory afterwards (will be reported as memory leak here).
+	DelphiMem.CheckMemoryLeak(true);
+  end;
 
 {$else} // MEMTEST_ACTIVE
 
